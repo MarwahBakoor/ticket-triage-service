@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from app.database import get_connection
+from app.db.connection import get_connection
 
 
 def test_committed_data_persists_across_connections(database_path: Path) -> None:
@@ -19,7 +19,8 @@ def test_committed_data_persists_across_connections(database_path: Path) -> None
         row = connection.execute(
             "SELECT body FROM example WHERE id = ?", ("one",)
         ).fetchone()
-    assert row == ("A customer's request",)
+    assert isinstance(row, sqlite3.Row)
+    assert row["body"] == "A customer's request"
 
 
 def test_failed_transaction_rolls_back() -> None:
@@ -31,4 +32,20 @@ def test_failed_transaction_rolls_back() -> None:
         connection.execute("INSERT INTO example (id) VALUES (?)", ("one",))
 
     with get_connection() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM example").fetchone() == (0,)
+        row = connection.execute("SELECT COUNT(*) AS count FROM example").fetchone()
+        assert row["count"] == 0
+
+
+def test_default_database_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABASE_PATH")
+    monkeypatch.chdir(tmp_path)
+
+    with get_connection() as connection:
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+            == []
+        )
+
+    assert (tmp_path / "tickets.db").is_file()
