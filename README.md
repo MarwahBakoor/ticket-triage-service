@@ -1,17 +1,18 @@
 # Ticket-triage service
 
-Requires Python 3.12+, uv, and Docker Compose.
+Requires Python 3.12+ and uv. SQLite is included with Python.
 
 ## Setup
 
 ```sh
 uv sync
-export POSTGRES_USER=triage
-export POSTGRES_PASSWORD=local-development-only
-export POSTGRES_DB=triage
-export POSTGRES_HOST=localhost
-export POSTGRES_PORT=5432
-docker compose up -d
+```
+
+The database connection uses `tickets.db` in the current directory by default.
+The file is created on first connection. To choose another location:
+
+```sh
+export DATABASE_PATH=/path/to/tickets.db
 ```
 
 ## Run
@@ -29,8 +30,4 @@ uv run ruff format .
 uv run ruff check .
 ```
 
-## Stop PostgreSQL
-
-```sh
-docker compose down
-```
+Tests use isolated temporary SQLite files and never use the development database.
