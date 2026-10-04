@@ -26,6 +26,7 @@ curl http://127.0.0.1:8000/health
 
 ```sh
 uv run pytest
+uv run pytest app/db/test_connection.py
 uv run ruff format .
 uv run ruff check .
 ```
