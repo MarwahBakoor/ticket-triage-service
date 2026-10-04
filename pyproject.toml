@@ -1,0 +1,24 @@
+[project]
+name = "ticket-triage-service"
+version = "0.1.0"
+description = "A minimal FastAPI ticket-triage service."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "psycopg[binary]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+    "ruff",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py312"
