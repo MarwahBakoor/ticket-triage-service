@@ -1,5 +1,7 @@
 import asyncio
+import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,6 +13,8 @@ from app.db.tickets import get_ticket
 from app.llm.fake import MALFORMED_JSON_RESPONSE, BlockingFakeLLMClient, FakeLLMClient
 from app.main import app
 from app.workers.classification import ClassificationWorkers
+
+SAMPLES_PATH = Path(__file__).parents[2] / "sample_data" / "tickets.json"
 
 # Guards against a hung test; never part of the asserted behavior.
 TIMEOUT_SECONDS = 5
@@ -105,6 +109,28 @@ def test_invalid_ticket_is_rejected_and_not_stored(
     assert response.status_code == 422
     assert count_rows("tickets") == 0
     assert count_rows("classification_jobs") == 0
+
+
+def test_ticket_with_empty_subject_is_accepted(client: TestClient) -> None:
+    response = client.post(
+        "/tickets", json={"id": "t-1", "subject": "", "body": "asdf"}
+    )
+
+    assert response.status_code == 202
+    assert response.json()["subject"] == ""
+
+
+def test_sample_tickets_load_and_reload_without_duplicates(client: TestClient) -> None:
+    samples = json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))
+    expected_ids = [f"t-{number}" for number in range(1001, 1011)]
+
+    for _ in range(2):
+        responses = [client.post("/tickets", json=ticket) for ticket in samples]
+        assert [response.status_code for response in responses] == [202] * 10
+
+    assert [ticket["id"] for ticket in samples] == expected_ids
+    assert count_rows("tickets") == 10
+    assert count_rows("classification_jobs") == 10
 
 
 def test_get_ticket_returns_classified_ticket(client: TestClient) -> None:

@@ -26,7 +26,8 @@ class ClassificationJobStatus(StrEnum):
 
 class TicketCreate(BaseModel):
     id: str = Field(min_length=1)
-    subject: str = Field(min_length=1)
+    # Required, but may be empty: emailed tickets can arrive without a subject.
+    subject: str
     body: str = Field(min_length=1)
 
 
