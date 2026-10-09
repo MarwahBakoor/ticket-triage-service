@@ -97,3 +97,51 @@ def test_invalid_ticket_is_rejected_and_not_stored(
     assert response.status_code == 422
     assert count_rows("tickets") == 0
     assert count_rows("classification_jobs") == 0
+
+
+def test_get_ticket_returns_classified_ticket(client: TestClient) -> None:
+    client.post("/tickets", json=TICKET)
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE tickets SET category = ?, priority = ?, summary = ?
+            WHERE id = ?
+            """,
+            ("account", "high", "User cannot reset password", "t-1"),
+        )
+        connection.execute(
+            "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
+            ("completed", "t-1"),
+        )
+
+    response = client.get("/tickets/t-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == "t-1"
+    assert body["subject"] == "Cannot log in"
+    assert body["body"] == "Password reset did not work"
+    assert body["category"] == "account"
+    assert body["priority"] == "high"
+    assert body["summary"] == "User cannot reset password"
+    assert body["classification_status"] == "completed"
+
+
+def test_get_pending_ticket_matches_created_response(client: TestClient) -> None:
+    created = client.post("/tickets", json=TICKET)
+
+    response = client.get("/tickets/t-1")
+
+    assert response.status_code == 200
+    assert response.json() == created.json()
+    assert response.json()["classification_status"] == "pending"
+    assert response.json()["category"] is None
+    assert response.json()["priority"] is None
+    assert response.json()["summary"] is None
+
+
+def test_get_missing_ticket_returns_404(client: TestClient) -> None:
+    response = client.get("/tickets/missing")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
