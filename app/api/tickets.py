@@ -1,7 +1,14 @@
-from fastapi import APIRouter, HTTPException, status
+from typing import Annotated
 
-from app.api.schemas import TicketCreate, TicketResponse
-from app.db.tickets import create_ticket, get_ticket
+from fastapi import APIRouter, HTTPException, Query, status
+
+from app.api.schemas import (
+    TicketCategory,
+    TicketCreate,
+    TicketPriority,
+    TicketResponse,
+)
+from app.db.tickets import create_ticket, get_ticket, list_tickets
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -11,6 +18,17 @@ def submit_ticket(ticket: TicketCreate) -> TicketResponse:
     """Accept a ticket for classification; duplicate ids return the stored ticket."""
     stored, _ = create_ticket(ticket.id, ticket.subject, ticket.body)
     return TicketResponse.model_validate(stored)
+
+
+@router.get("", response_model=list[TicketResponse])
+def read_tickets(
+    category: TicketCategory | None = None,
+    priority: TicketPriority | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[TicketResponse]:
+    stored = list_tickets(category, priority, limit, offset)
+    return [TicketResponse.model_validate(ticket) for ticket in stored]
 
 
 @router.get("/{ticket_id}", response_model=TicketResponse)

@@ -5,7 +5,7 @@ import pytest
 
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
-from app.db.tickets import create_ticket, get_ticket
+from app.db.tickets import create_ticket, get_ticket, list_tickets
 
 
 @pytest.fixture(autouse=True)
@@ -106,3 +106,66 @@ def test_failed_job_insert_leaves_no_ticket_row():
 
     assert count_rows("tickets") == 0
     assert count_rows("classification_jobs") == 1
+
+
+def classify(ticket_id: str, category: str, priority: str) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE tickets SET category = ?, priority = ? WHERE id = ?",
+            (category, priority, ticket_id),
+        )
+        connection.execute(
+            "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
+            ("completed", ticket_id),
+        )
+
+
+@pytest.fixture
+def mixed_tickets() -> None:
+    create_ticket("t-1", "Double charge", "Charged twice")
+    create_ticket("t-2", "Refund", "Want a refund")
+    create_ticket("t-3", "App crashes", "Crashes on start")
+    create_ticket("t-4", "Hello", "Not classified yet")
+    classify("t-1", "billing", "high")
+    classify("t-2", "billing", "low")
+    classify("t-3", "technical", "high")
+
+
+def ids(tickets: list[dict]) -> list[str]:
+    return [ticket["id"] for ticket in tickets]
+
+
+def test_list_tickets_without_filters_returns_all_oldest_first(mixed_tickets):
+    tickets = list_tickets()
+
+    assert ids(tickets) == ["t-1", "t-2", "t-3", "t-4"]
+    assert [ticket["classification_status"] for ticket in tickets] == [
+        "completed",
+        "completed",
+        "completed",
+        "pending",
+    ]
+
+
+def test_list_tickets_filters_by_category(mixed_tickets):
+    assert ids(list_tickets(category="billing")) == ["t-1", "t-2"]
+
+
+def test_list_tickets_filters_by_priority(mixed_tickets):
+    assert ids(list_tickets(priority="high")) == ["t-1", "t-3"]
+
+
+def test_list_tickets_filters_by_category_and_priority(mixed_tickets):
+    assert ids(list_tickets(category="billing", priority="high")) == ["t-1"]
+
+
+def test_list_tickets_applies_limit(mixed_tickets):
+    assert ids(list_tickets(limit=2)) == ["t-1", "t-2"]
+
+
+def test_list_tickets_applies_offset(mixed_tickets):
+    assert ids(list_tickets(limit=2, offset=2)) == ["t-3", "t-4"]
+
+
+def test_list_tickets_with_no_matches_returns_empty_list(mixed_tickets):
+    assert list_tickets(category="account") == []

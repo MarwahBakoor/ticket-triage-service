@@ -145,3 +145,106 @@ def test_get_missing_ticket_returns_404(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Ticket not found"}
+
+
+def classify(ticket_id: str, category: str, priority: str) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE tickets SET category = ?, priority = ? WHERE id = ?",
+            (category, priority, ticket_id),
+        )
+        connection.execute(
+            "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
+            ("completed", ticket_id),
+        )
+
+
+@pytest.fixture
+def mixed_tickets(client: TestClient) -> None:
+    for ticket_id in ("t-1", "t-2", "t-3", "t-4"):
+        client.post(
+            "/tickets",
+            json={"id": ticket_id, "subject": "Subject", "body": "Body"},
+        )
+    classify("t-1", "billing", "high")
+    classify("t-2", "billing", "low")
+    classify("t-3", "technical", "high")
+
+
+def list_ids(client: TestClient, params: dict[str, str | int]) -> list[str]:
+    response = client.get("/tickets", params=params)
+    assert response.status_code == 200
+    return [ticket["id"] for ticket in response.json()]
+
+
+def test_list_tickets_without_filters_returns_all(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    response = client.get("/tickets")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [ticket["id"] for ticket in body] == ["t-1", "t-2", "t-3", "t-4"]
+    assert body[0]["category"] == "billing"
+    assert body[0]["priority"] == "high"
+    assert body[0]["classification_status"] == "completed"
+    assert body[3]["category"] is None
+    assert body[3]["classification_status"] == "pending"
+
+
+def test_list_tickets_filters_by_category(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    assert list_ids(client, {"category": "billing"}) == ["t-1", "t-2"]
+
+
+def test_list_tickets_filters_by_priority(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    assert list_ids(client, {"priority": "high"}) == ["t-1", "t-3"]
+
+
+def test_list_tickets_filters_by_category_and_priority(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    assert list_ids(client, {"category": "billing", "priority": "high"}) == ["t-1"]
+
+
+def test_list_tickets_applies_limit(client: TestClient, mixed_tickets: None) -> None:
+    assert list_ids(client, {"limit": 2}) == ["t-1", "t-2"]
+
+
+def test_list_tickets_applies_offset(client: TestClient, mixed_tickets: None) -> None:
+    assert list_ids(client, {"offset": 1}) == ["t-2", "t-3", "t-4"]
+    assert list_ids(client, {"limit": 2, "offset": 2}) == ["t-3", "t-4"]
+
+
+def test_list_tickets_defaults_to_20_results(client: TestClient) -> None:
+    for number in range(21):
+        client.post(
+            "/tickets",
+            json={"id": f"t-{number:02d}", "subject": "Subject", "body": "Body"},
+        )
+
+    assert len(list_ids(client, {})) == 20
+    assert len(list_ids(client, {"limit": 100})) == 21
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"category": "shipping"},
+        {"priority": "urgent"},
+        {"limit": 0},
+        {"limit": 101},
+        {"limit": "ten"},
+        {"offset": -1},
+        {"offset": "one"},
+    ],
+)
+def test_list_tickets_rejects_invalid_query_values(
+    client: TestClient, params: dict[str, str | int]
+) -> None:
+    response = client.get("/tickets", params=params)
+
+    assert response.status_code == 422

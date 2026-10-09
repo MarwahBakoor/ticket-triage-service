@@ -4,7 +4,7 @@ from typing import Any
 
 from app.db.connection import get_connection
 
-_SELECT_TICKET = """
+_SELECT_TICKETS = """
     SELECT
         tickets.id,
         tickets.subject,
@@ -17,14 +17,15 @@ _SELECT_TICKET = """
         classification_jobs.status AS classification_status
     FROM tickets
     JOIN classification_jobs ON classification_jobs.ticket_id = tickets.id
-    WHERE tickets.id = ?
 """
 
 
 def _fetch_ticket(
     connection: sqlite3.Connection, ticket_id: str
 ) -> dict[str, Any] | None:
-    row = connection.execute(_SELECT_TICKET, (ticket_id,)).fetchone()
+    row = connection.execute(
+        _SELECT_TICKETS + " WHERE tickets.id = ?", (ticket_id,)
+    ).fetchone()
     return dict(row) if row is not None else None
 
 
@@ -65,3 +66,28 @@ def create_ticket(
 def get_ticket(ticket_id: str) -> dict[str, Any] | None:
     with get_connection() as connection:
         return _fetch_ticket(connection, ticket_id)
+
+
+def list_tickets(
+    category: str | None = None,
+    priority: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return tickets oldest first, optionally filtered by category and priority."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if category is not None:
+        conditions.append("tickets.category = ?")
+        params.append(category)
+    if priority is not None:
+        conditions.append("tickets.priority = ?")
+        params.append(priority)
+    query = _SELECT_TICKETS
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY tickets.created_at, tickets.id LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    with get_connection() as connection:
+        rows = connection.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
