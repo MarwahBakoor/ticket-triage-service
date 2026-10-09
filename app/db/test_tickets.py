@@ -3,9 +3,20 @@ from pathlib import Path
 
 import pytest
 
+from app.api.schemas import TicketCategory, TicketPriority
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
-from app.db.tickets import create_ticket, get_ticket, list_tickets
+from app.db.tickets import (
+    complete_classification,
+    create_ticket,
+    get_classification_job,
+    get_ticket,
+    list_tickets,
+    mark_job_failed,
+    mark_job_processing,
+    record_failed_attempt,
+)
+from app.llm.validation import ClassificationResult
 
 
 @pytest.fixture(autouse=True)
@@ -169,3 +180,171 @@ def test_list_tickets_applies_offset(mixed_tickets):
 
 def test_list_tickets_with_no_matches_returns_empty_list(mixed_tickets):
     assert list_tickets(category="account") == []
+
+
+RESULT = ClassificationResult(
+    category=TicketCategory.BILLING,
+    priority=TicketPriority.HIGH,
+    summary="Customer was charged twice.",
+)
+OLD_TIMESTAMP = "2000-01-01T00:00:00+00:00"
+
+
+@pytest.fixture
+def processing_job() -> None:
+    create_ticket("t-1", "Double charge", "Charged twice")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE tickets SET updated_at = ? WHERE id = ?", (OLD_TIMESTAMP, "t-1")
+        )
+        connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = 'processing', updated_at = ?
+            WHERE ticket_id = ?
+            """,
+            (OLD_TIMESTAMP, "t-1"),
+        )
+
+
+def set_job_status(ticket_id: str, status: str) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
+            (status, ticket_id),
+        )
+
+
+def test_get_classification_job_returns_job():
+    create_ticket("t-1", "Double charge", "Charged twice")
+
+    job = get_classification_job("t-1")
+
+    assert job is not None
+    assert job["ticket_id"] == "t-1"
+    assert job["status"] == "pending"
+    assert job["attempts"] == 0
+    assert job["last_error"] is None
+
+
+def test_get_missing_classification_job_returns_none():
+    assert get_classification_job("missing") is None
+
+
+def test_mark_job_processing_claims_pending_job():
+    create_ticket("t-1", "Double charge", "Charged twice")
+
+    assert mark_job_processing("t-1") is True
+    assert get_classification_job("t-1")["status"] == "processing"
+
+
+@pytest.mark.parametrize("status", ["processing", "completed", "failed"])
+def test_mark_job_processing_ignores_job_that_is_not_pending(status):
+    create_ticket("t-1", "Double charge", "Charged twice")
+    set_job_status("t-1", status)
+
+    assert mark_job_processing("t-1") is False
+    assert get_classification_job("t-1")["status"] == status
+
+
+def test_mark_missing_job_processing_returns_false():
+    assert mark_job_processing("missing") is False
+
+
+def test_record_failed_attempt_increments_attempts_and_keeps_latest_error(
+    processing_job,
+):
+    assert record_failed_attempt("t-1", "malformed JSON") is True
+    assert record_failed_attempt("t-1", "invalid category") is True
+
+    job = get_classification_job("t-1")
+    assert job["attempts"] == 2
+    assert job["last_error"] == "invalid category"
+    assert job["status"] == "processing"
+    assert job["updated_at"] != OLD_TIMESTAMP
+
+
+def test_record_failed_attempt_does_not_touch_ticket(processing_job):
+    before = get_ticket("t-1")
+
+    record_failed_attempt("t-1", "malformed JSON")
+
+    after = get_ticket("t-1")
+    assert after == before
+    assert "attempts" not in after
+    assert "last_error" not in after
+
+
+def test_record_failed_attempt_ignores_job_that_is_not_processing():
+    create_ticket("t-1", "Double charge", "Charged twice")
+
+    assert record_failed_attempt("t-1", "malformed JSON") is False
+    assert get_classification_job("t-1")["attempts"] == 0
+
+
+def test_mark_job_failed_keeps_attempts_and_error(processing_job):
+    record_failed_attempt("t-1", "timeout")
+
+    assert mark_job_failed("t-1") is True
+
+    job = get_classification_job("t-1")
+    assert job["status"] == "failed"
+    assert job["attempts"] == 1
+    assert job["last_error"] == "timeout"
+    ticket = get_ticket("t-1")
+    assert ticket["category"] is None
+    assert ticket["priority"] is None
+    assert ticket["summary"] is None
+
+
+def test_mark_job_failed_ignores_job_that_is_not_processing():
+    create_ticket("t-1", "Double charge", "Charged twice")
+
+    assert mark_job_failed("t-1") is False
+    assert get_classification_job("t-1")["status"] == "pending"
+
+
+def test_complete_classification_updates_ticket_and_job(processing_job):
+    assert complete_classification("t-1", RESULT) is True
+
+    ticket = get_ticket("t-1")
+    job = get_classification_job("t-1")
+    assert ticket["category"] == "billing"
+    assert ticket["priority"] == "high"
+    assert ticket["summary"] == "Customer was charged twice."
+    assert ticket["classification_status"] == "completed"
+    assert job["status"] == "completed"
+    assert ticket["updated_at"] != OLD_TIMESTAMP
+    assert ticket["updated_at"] == job["updated_at"]
+
+
+@pytest.mark.parametrize("status", ["pending", "completed", "failed"])
+def test_complete_classification_ignores_job_that_is_not_processing(status):
+    create_ticket("t-1", "Double charge", "Charged twice")
+    set_job_status("t-1", status)
+
+    assert complete_classification("t-1", RESULT) is False
+
+    ticket = get_ticket("t-1")
+    assert ticket["category"] is None
+    assert ticket["summary"] is None
+    assert get_classification_job("t-1")["status"] == status
+
+
+def test_complete_classification_rolls_back_job_when_ticket_update_fails():
+    # An orphaned job row makes the ticket update fail after the job update.
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO classification_jobs (ticket_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("t-1", "processing", OLD_TIMESTAMP, OLD_TIMESTAMP),
+        )
+
+    with pytest.raises(RuntimeError):
+        complete_classification("t-1", RESULT)
+
+    job = get_classification_job("t-1")
+    assert job["status"] == "processing"
+    assert job["updated_at"] == OLD_TIMESTAMP

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.db.connection import get_connection
+from app.llm.validation import ClassificationResult
 
 _SELECT_TICKETS = """
     SELECT
@@ -91,3 +92,91 @@ def list_tickets(
     with get_connection() as connection:
         rows = connection.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_classification_job(ticket_id: str) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT ticket_id, status, attempts, last_error, created_at, updated_at
+            FROM classification_jobs
+            WHERE ticket_id = ?
+            """,
+            (ticket_id,),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def mark_job_processing(ticket_id: str) -> bool:
+    """Claim a pending job. Returns False if the job is missing or not pending."""
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = 'processing', updated_at = ?
+            WHERE ticket_id = ? AND status = 'pending'
+            """,
+            (now, ticket_id),
+        )
+    return cursor.rowcount == 1
+
+
+def record_failed_attempt(ticket_id: str, error: str) -> bool:
+    """Count a failed attempt on a processing job and keep its latest error."""
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE classification_jobs
+            SET attempts = attempts + 1, last_error = ?, updated_at = ?
+            WHERE ticket_id = ? AND status = 'processing'
+            """,
+            (error, now, ticket_id),
+        )
+    return cursor.rowcount == 1
+
+
+def mark_job_failed(ticket_id: str) -> bool:
+    """Mark a processing job as permanently failed."""
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = 'failed', updated_at = ?
+            WHERE ticket_id = ? AND status = 'processing'
+            """,
+            (now, ticket_id),
+        )
+    return cursor.rowcount == 1
+
+
+def complete_classification(ticket_id: str, result: ClassificationResult) -> bool:
+    """Store a validated classification and complete its job in one transaction.
+
+    Returns False without writing anything if the job is not processing.
+    """
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = 'completed', updated_at = ?
+            WHERE ticket_id = ? AND status = 'processing'
+            """,
+            (now, ticket_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        cursor = connection.execute(
+            """
+            UPDATE tickets
+            SET category = ?, priority = ?, summary = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (result.category, result.priority, result.summary, now, ticket_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"classification job {ticket_id!r} has no ticket")
+    return True
