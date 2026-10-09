@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +12,10 @@ from app.llm.fake import (
     MALFORMED_JSON_RESPONSE,
     VALID_RESPONSE,
     FakeLLMClient,
+    KeywordFakeLLMClient,
 )
+from app.llm.prompts import build_classification_prompt
+from app.llm.validation import ClassificationError, parse_classification
 
 
 def classify(client: LLMClient, prompt: str = "prompt") -> str:
@@ -74,3 +78,55 @@ def test_invalid_responses_differ_from_valid_response_only_in_one_field(
     response, field, value
 ):
     assert json.loads(response) == json.loads(VALID_RESPONSE) | {field: value}
+
+
+SAMPLES_PATH = Path(__file__).parents[2] / "sample_data" / "tickets.json"
+
+
+def keyword_classification(client: KeywordFakeLLMClient, subject: str, body: str):
+    return parse_classification(
+        classify(client, build_classification_prompt(subject, body))
+    )
+
+
+def test_keyword_fake_returns_valid_plausible_classifications_for_samples():
+    client = KeywordFakeLLMClient()
+    samples = json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))
+
+    results = {
+        ticket["id"]: keyword_classification(client, ticket["subject"], ticket["body"])
+        for ticket in samples
+    }
+
+    assert {
+        ticket_id: (r.category, r.priority) for ticket_id, r in results.items()
+    } == {
+        "t-1001": ("billing", "medium"),
+        "t-1002": ("account", "medium"),
+        "t-1003": ("technical", "high"),
+        "t-1004": ("account", "medium"),
+        "t-1005": ("billing", "high"),
+        "t-1006": ("other", "low"),
+        "t-1007": ("billing", "medium"),
+        "t-1008": ("other", "medium"),
+        "t-1009": ("technical", "medium"),
+        "t-1010": ("technical", "medium"),
+    }
+    assert (
+        results["t-1001"].summary
+        == "Customer wrote in about: Charged twice this month."
+    )
+    assert results["t-1008"].summary == "Customer wrote in about: asdf."
+
+
+def test_keyword_fake_returns_malformed_json_every_nth_call():
+    client = KeywordFakeLLMClient(broken_every=2)
+    prompt = build_classification_prompt("Charged twice", "Please refund")
+
+    outputs = [classify(client, prompt) for _ in range(4)]
+
+    assert outputs[1] == MALFORMED_JSON_RESPONSE
+    assert outputs[3] == MALFORMED_JSON_RESPONSE
+    assert parse_classification(outputs[0]).category == "billing"
+    with pytest.raises(ClassificationError):
+        parse_classification(outputs[1])

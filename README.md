@@ -32,10 +32,11 @@ uv run python scripts/load_samples.py http://host:port
 
 The loader posts each ticket through `POST /tickets`, so rerunning it is safe.
 
-**Note:** no real LLM client is wired into `app.main` yet. Without one, the
-service logs a warning, starts no workers, and new tickets stay `pending`.
-Tests inject deterministic fakes from `app/llm/fake.py` via
-`app.state.llm_client`.
+No real model is called. The running app uses `KeywordFakeLLMClient`
+(`app/llm/fake.py`), which classifies by keyword matching and returns malformed
+JSON on every 4th call so retries happen during local use. After loading the
+samples, `GET /tickets` shows them classified within moments. Tests replace it
+with scripted fakes via `app.state.llm_client`.
 
 Tests and lint:
 
@@ -157,17 +158,17 @@ allowed answer. Sample `t-1005` is a regression test covering both cases.
   attempts, which are retried on restart.
 - **No migrations**: `CREATE TABLE IF NOT EXISTS` only. Schema changes on an
   existing database need manual handling.
-- **Fake LLM**: only deterministic fakes exist, and none is wired into the
-  running app yet. Behavior against a real provider (latency, rate limits,
-  output drift) is untested.
+- **Fake LLM**: the keyword fake is plausible, not accurate. For example, it
+  rates `t-1005` high priority because the text says "URGENT". Behavior against
+  a real provider (latency, rate limits, output drift) is untested.
 - Classification status is named `completed` rather than `classified`.
 - Database calls in the classification workflow run on the event loop. They
   are short, but a locked database would briefly block the loop.
 
 ## With more time
 
-- Wire a real provider client behind `LLMClient`, with timeouts and rate-limit
-  handling.
+- Add a real provider client behind `LLMClient`, chosen by configuration, with
+  timeouts and rate-limit handling.
 - Exponential backoff between retries.
 - Graceful shutdown that lets in-flight attempts finish before cancelling.
 - A way to re-run failed jobs or re-classify after a prompt change.

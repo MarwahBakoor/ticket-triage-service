@@ -9,6 +9,7 @@ from app.api import tickets
 from app.db.schema import initialize_database
 from app.db.tickets import recover_unfinished_jobs
 from app.llm.client import LLMClient
+from app.llm.fake import KeywordFakeLLMClient
 from app.workers.classification import ClassificationWorkers, worker_count_from_env
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+# No real provider is wired in; a keyword fake keeps the service usable locally.
+app.state.llm_client = KeywordFakeLLMClient(broken_every=4)
 app.include_router(tickets.router)
 
 
