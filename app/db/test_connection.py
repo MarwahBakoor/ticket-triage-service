@@ -6,6 +6,20 @@ import pytest
 from app.db.connection import get_connection
 
 
+def test_database_path_read_for_each_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("first.sqlite", "second.sqlite3"):
+        path = tmp_path / name
+        monkeypatch.setenv("DATABASE_PATH", str(path))
+
+        with get_connection() as connection:
+            database = connection.execute("PRAGMA database_list").fetchone()
+            assert database["file"] == str(path)
+
+        assert path.is_file()
+
+
 def test_committed_data_persists_across_connections(database_path: Path) -> None:
     with get_connection() as connection:
         connection.execute("CREATE TABLE example (id TEXT PRIMARY KEY, body TEXT)")
