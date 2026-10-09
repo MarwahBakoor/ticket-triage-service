@@ -180,3 +180,31 @@ def complete_classification(ticket_id: str, result: ClassificationResult) -> boo
         if cursor.rowcount != 1:
             raise RuntimeError(f"classification job {ticket_id!r} has no ticket")
     return True
+
+
+def recover_unfinished_jobs() -> list[str]:
+    """Reset interrupted jobs to pending and return every pending ticket id.
+
+    Call only at startup, before any worker runs: a job still marked
+    processing then belongs to a process that stopped mid-attempt. Its
+    attempt count is kept, so the interrupted attempt is simply retried.
+    Completed and failed jobs are never returned.
+    """
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = 'pending', updated_at = ?
+            WHERE status = 'processing'
+            """,
+            (now,),
+        )
+        rows = connection.execute(
+            """
+            SELECT ticket_id FROM classification_jobs
+            WHERE status = 'pending'
+            ORDER BY created_at, ticket_id
+            """
+        ).fetchall()
+    return [row["ticket_id"] for row in rows]

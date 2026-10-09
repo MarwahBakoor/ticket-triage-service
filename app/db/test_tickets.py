@@ -15,6 +15,7 @@ from app.db.tickets import (
     mark_job_failed,
     mark_job_processing,
     record_failed_attempt,
+    recover_unfinished_jobs,
 )
 from app.llm.validation import ClassificationResult
 
@@ -348,3 +349,39 @@ def test_complete_classification_rolls_back_job_when_ticket_update_fails():
     job = get_classification_job("t-1")
     assert job["status"] == "processing"
     assert job["updated_at"] == OLD_TIMESTAMP
+
+
+def test_recover_unfinished_jobs_returns_pending_job():
+    create_ticket("t-1", "Double charge", "Charged twice")
+
+    assert recover_unfinished_jobs() == ["t-1"]
+    assert get_classification_job("t-1")["status"] == "pending"
+
+
+def test_recover_unfinished_jobs_resets_interrupted_processing_job(processing_job):
+    record_failed_attempt("t-1", "LLM call failed: TimeoutError")
+
+    assert recover_unfinished_jobs() == ["t-1"]
+    job = get_classification_job("t-1")
+    assert job["status"] == "pending"
+    assert job["attempts"] == 1
+    assert job["updated_at"] != OLD_TIMESTAMP
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_recover_unfinished_jobs_skips_finished_job(status):
+    create_ticket("t-1", "Double charge", "Charged twice")
+    set_job_status("t-1", status)
+
+    assert recover_unfinished_jobs() == []
+    assert get_classification_job("t-1")["status"] == status
+
+
+def test_recover_unfinished_jobs_returns_only_unfinished_jobs_oldest_first():
+    for ticket_id in ("t-1", "t-2", "t-3", "t-4"):
+        create_ticket(ticket_id, "Subject", "Body")
+    set_job_status("t-1", "completed")
+    set_job_status("t-2", "processing")
+    set_job_status("t-3", "failed")
+
+    assert recover_unfinished_jobs() == ["t-2", "t-4"]
