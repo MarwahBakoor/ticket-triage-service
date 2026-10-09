@@ -5,6 +5,7 @@ description = "A minimal FastAPI ticket-triage service."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
+    "pydantic",
     "uvicorn",
 ]
 
@@ -18,6 +19,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["app"]
 pythonpath = ["."]
+# Tests live next to the code in app/, so the shared fixtures in
+# tests/conftest.py are loaded as a plugin rather than by directory.
+addopts = ["-p", "tests.conftest"]
 
 [tool.ruff]
 target-version = "py312"
