@@ -24,6 +24,15 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
 
     prompt = build_classification_prompt(ticket["subject"], ticket["body"])
     while True:
+        # Checked before each call: a job recovered after a crash may already
+        # have used every attempt.
+        job = get_classification_job(ticket_id)
+        if job is None:
+            return False
+        if job["attempts"] >= MAX_ATTEMPTS:
+            mark_job_failed(ticket_id)
+            return False
+
         # Errors are stored as fixed text so untrusted model output never leaks in.
         try:
             raw_output = await llm.classify(prompt)
@@ -38,10 +47,4 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
                 return complete_classification(ticket_id, result)
 
         if not record_failed_attempt(ticket_id, last_error):
-            return False
-        job = get_classification_job(ticket_id)
-        if job is None:
-            return False
-        if job["attempts"] >= MAX_ATTEMPTS:
-            mark_job_failed(ticket_id)
             return False

@@ -103,6 +103,23 @@ def test_three_failures_mark_job_failed():
     assert job["last_error"] == "Model output was not a valid classification"
 
 
+def test_recovered_job_with_no_attempts_left_fails_without_calling_llm():
+    # A crash after the third failure but before marking the job failed.
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE classification_jobs SET attempts = ? WHERE ticket_id = ?",
+            (3, "t-1"),
+        )
+    llm = FakeLLMClient([VALID_RESPONSE])
+
+    assert asyncio.run(classify_ticket("t-1", llm)) is False
+    assert llm.prompts == []
+    job = get_classification_job("t-1")
+    assert job["status"] == "failed"
+    assert job["attempts"] == 3
+
+
 def test_failed_classification_does_not_write_invalid_fields():
     create_ticket("t-1", "Double charge", "I was charged twice this month")
     llm = FakeLLMClient(

@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await workers.stop()
+        # Stopped workers must not receive tickets from a later request.
+        app.state.classification_workers = None
 
 
 app = FastAPI(lifespan=lifespan)
