@@ -10,7 +10,6 @@ def get_connection() -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(os.environ.get("DATABASE_PATH", "tickets.db"))
     try:
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
         with connection:
             yield connection
     finally:
