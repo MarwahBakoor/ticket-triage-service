@@ -70,6 +70,26 @@ def test_duplicate_ticket_does_not_replace_original_content():
     assert get_ticket("t-1") == original
 
 
+def test_existing_ticket_without_job_raises():
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO tickets (id, subject, body, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "t-1",
+                "Cannot log in",
+                "Password reset failed",
+                "2026-10-09",
+                "2026-10-09",
+            ),
+        )
+
+    with pytest.raises(RuntimeError):
+        create_ticket("t-1", "Cannot log in", "Password reset failed")
+
+
 def test_failed_job_insert_leaves_no_ticket_row():
     # An orphaned job row makes the job insert fail after the ticket insert.
     with get_connection() as connection:

@@ -57,7 +57,8 @@ def create_ticket(
                 (ticket_id, now, now),
             )
         ticket = _fetch_ticket(connection, ticket_id)
-    assert ticket is not None
+    if ticket is None:
+        raise RuntimeError(f"ticket {ticket_id!r} has no classification job")
     return ticket, created
 
 
