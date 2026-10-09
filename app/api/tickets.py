@@ -1,6 +1,7 @@
+import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from app.api.schemas import (
     TicketCategory,
@@ -14,9 +15,19 @@ router = APIRouter(prefix="/tickets", tags=["tickets"])
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=TicketResponse)
-def submit_ticket(ticket: TicketCreate) -> TicketResponse:
-    """Accept a ticket for classification; duplicate ids return the stored ticket."""
-    stored, _ = create_ticket(ticket.id, ticket.subject, ticket.body)
+async def submit_ticket(ticket: TicketCreate, request: Request) -> TicketResponse:
+    """Accept a ticket for classification; duplicate ids return the stored ticket.
+
+    Classification runs later on a worker. Only newly created tickets are
+    enqueued, and only after their transaction has committed.
+    """
+    stored, created = await asyncio.to_thread(
+        create_ticket, ticket.id, ticket.subject, ticket.body
+    )
+    # Enqueue on the event loop thread: asyncio.Queue is not thread-safe.
+    workers = getattr(request.app.state, "classification_workers", None)
+    if created and workers is not None:
+        workers.enqueue(ticket.id)
     return TicketResponse.model_validate(stored)
 
 

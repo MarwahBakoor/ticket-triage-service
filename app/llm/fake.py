@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections import deque
 from collections.abc import Iterable
@@ -44,3 +45,32 @@ class FakeLLMClient:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+class BlockingFakeLLMClient:
+    """Hold every call until `release` is set, tracking how many run at once."""
+
+    def __init__(self, response: str = VALID_RESPONSE) -> None:
+        self.release = asyncio.Event()
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.prompts: list[str] = []
+        self._response = response
+        self._changed = asyncio.Condition()
+
+    async def classify(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        async with self._changed:
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            self._changed.notify_all()
+        try:
+            await self.release.wait()
+            return self._response
+        finally:
+            self.in_flight -= 1
+
+    async def wait_for_in_flight(self, count: int) -> None:
+        """Wait until at least `count` calls are blocked inside `classify`."""
+        async with self._changed:
+            await self._changed.wait_for(lambda: self.in_flight >= count)
