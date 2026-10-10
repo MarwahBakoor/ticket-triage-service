@@ -61,18 +61,18 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
                 llm.classify(prompt), LLM_TIMEOUT_SECONDS
             )
         except Exception as error:  # noqa: BLE001 - any client error is retryable
-            last_error = f"LLM call failed: {type(error).__name__}"
+            run_error = f"LLM call failed: {type(error).__name__}"
         else:
             try:
                 result = parse_classification(raw_output)
             except ClassificationError:
-                last_error = "Model output was not a valid classification"
+                run_error = "Model output was not a valid classification"
             else:
                 return await asyncio.to_thread(
                     complete_classification, ticket_id, run_id, result
                 )
 
         if not await asyncio.to_thread(
-            record_failed_attempt, ticket_id, run_id, last_error
+            record_failed_attempt, ticket_id, run_id, run_error
         ):
             return False

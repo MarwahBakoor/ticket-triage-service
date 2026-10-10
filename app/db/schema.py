@@ -28,7 +28,6 @@ def initialize_database() -> None:
                 status TEXT NOT NULL
                     CHECK (status IN ('pending', 'processing', 'classified', 'failed')),
                 attempts INTEGER NOT NULL DEFAULT 0,
-                last_error TEXT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )

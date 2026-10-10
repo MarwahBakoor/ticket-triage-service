@@ -49,7 +49,6 @@ def test_ticket_and_classification_job_created_together():
         ).fetchone()
     assert job is not None
     assert job["attempts"] == 0
-    assert job["last_error"] is None
 
 
 def test_new_ticket_classification_status_is_pending():
@@ -256,7 +255,6 @@ def test_get_classification_job_returns_job():
     assert job["ticket_id"] == "t-1"
     assert job["status"] == "pending"
     assert job["attempts"] == 0
-    assert job["last_error"] is None
 
 
 def test_get_missing_classification_job_returns_none():
@@ -331,7 +329,7 @@ def test_start_run_refuses_missing_job():
     assert count_runs() == 0
 
 
-def test_record_failed_attempt_increments_attempts_and_keeps_latest_error(
+def test_record_failed_attempt_increments_attempts(
     processing_job,
 ):
     assert record_failed_attempt("t-1", start_run("t-1"), "malformed JSON") is True
@@ -339,7 +337,6 @@ def test_record_failed_attempt_increments_attempts_and_keeps_latest_error(
 
     job = get_classification_job("t-1")
     assert job["attempts"] == 2
-    assert job["last_error"] == "invalid category"
     assert job["status"] == "processing"
     assert job["updated_at"] != OLD_TIMESTAMP
 
@@ -363,7 +360,6 @@ def test_record_failed_attempt_does_not_touch_ticket(processing_job):
     after = get_ticket("t-1")
     assert after == before
     assert "attempts" not in after
-    assert "last_error" not in after
 
 
 def test_record_failed_attempt_still_fails_run_when_job_is_not_processing(
@@ -389,7 +385,7 @@ def test_record_failed_attempt_rejects_run_that_is_not_running(processing_job):
     assert get_run(run_id)["error"] == "timeout"
 
 
-def test_mark_job_failed_keeps_attempts_and_error(processing_job):
+def test_mark_job_failed_keeps_attempts(processing_job):
     record_failed_attempt("t-1", start_run("t-1"), "timeout")
 
     assert mark_job_failed("t-1") is True
@@ -397,7 +393,6 @@ def test_mark_job_failed_keeps_attempts_and_error(processing_job):
     job = get_classification_job("t-1")
     assert job["status"] == "failed"
     assert job["attempts"] == 1
-    assert job["last_error"] == "timeout"
     ticket = get_ticket("t-1")
     assert ticket["category"] is None
     assert ticket["priority"] is None
@@ -545,10 +540,10 @@ def finished_job(status: str) -> None:
         connection.execute(
             """
             UPDATE classification_jobs
-            SET status = ?, attempts = ?, last_error = ?
+            SET status = ?, attempts = ?
             WHERE ticket_id = ?
             """,
-            (status, 3, "Model output was not a valid classification", "t-1"),
+            (status, 3, "t-1"),
         )
 
 
@@ -567,7 +562,6 @@ def test_reset_for_reclassification_returns_finished_job_to_pending(status):
     )
     job = get_classification_job("t-1")
     assert job["attempts"] == 0
-    assert job["last_error"] is None
 
 
 @pytest.mark.parametrize("status", ["pending", "processing"])

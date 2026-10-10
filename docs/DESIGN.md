@@ -7,18 +7,27 @@ How the ticket-triage service works and why. For running and using it, see
 
 - `tickets`: the ticket content plus the latest successful `category`,
   `priority` and `summary`.
-- `classification_jobs`: one row per ticket with the async status, `attempts`
-  and `last_error`.
+- `classification_jobs`: one row per ticket with the async status and
+  `attempts`. It is the current state, and the row a worker claims.
 - `classification_runs`: one row per classification attempt, numbered per
   ticket (`run_number`), with its status (`running`, `completed` or `failed`),
   a fixed-text `error`, and `started_at`/`finished_at`. A CHECK constraint
-  keeps `finished_at` null exactly while a run is `running`.
+  keeps `finished_at` null exactly while a run is `running`. It is the
+  append-only history, and the only place errors are kept.
 
 Operational state lives apart from the ticket so that the ticket only holds
 validated results. Retries, errors and status transitions change the job row
 without touching ticket data, and a validated result plus the `classified`
 status are written in one transaction. Each run is finished in the same
 transaction as the job change it causes, so runs and jobs always agree.
+
+Jobs and runs are deliberately separate tables: one row per ticket versus one
+row per attempt. Merging them would make "current status" mean "the latest
+run", which every list query would have to compute, and would take away the
+single-row conditional `UPDATE` that lets exactly one worker claim a ticket.
+The job's `attempts` overlaps with the run count, but deriving it would need
+a marker for the last reclassification, so it stays a counter.
+
 Both CHECK constraints and the
 application restrict the allowed values. There are no foreign keys; the
 relationship is enforced in application code.
@@ -56,8 +65,9 @@ than 30 seconds, malformed JSON and validation failures all count as failed
 attempts. Retries wait 1 s, then 2 s (exponential backoff), so a briefly
 overloaded provider is not hit again at once; the worker stays busy while it
 waits. After the third failure the job becomes `failed` and the ticket's
-classification fields stay null. `last_error` holds fixed text such as
-`LLM call failed: TimeoutError`, never raw model output or exception messages.
+classification fields stay null. Each failed run's `error` holds fixed text
+such as `LLM call failed: TimeoutError`, never raw model output or exception
+messages.
 
 ## LLM trust boundary
 

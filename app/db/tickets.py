@@ -124,7 +124,7 @@ def get_classification_job(ticket_id: str) -> dict[str, Any] | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT ticket_id, status, attempts, last_error, created_at, updated_at
+            SELECT ticket_id, status, attempts, created_at, updated_at
             FROM classification_jobs
             WHERE ticket_id = ?
             """,
@@ -199,7 +199,7 @@ def _finish_run(
 
 
 def record_failed_attempt(ticket_id: str, run_id: int, error: str) -> bool:
-    """Fail a run, count the attempt on its job and keep the latest error.
+    """Fail a run with its error and count the attempt on its job.
 
     The run is always recorded as failed. Returns False if the job is no
     longer processing, in which case the job is left unchanged.
@@ -210,10 +210,10 @@ def record_failed_attempt(ticket_id: str, run_id: int, error: str) -> bool:
         cursor = connection.execute(
             """
             UPDATE classification_jobs
-            SET attempts = attempts + 1, last_error = ?, updated_at = ?
+            SET attempts = attempts + 1, updated_at = ?
             WHERE ticket_id = ? AND status = 'processing'
             """,
-            (error, now, ticket_id),
+            (now, ticket_id),
         )
     return cursor.rowcount == 1
 
@@ -283,7 +283,7 @@ def reset_for_reclassification(ticket_id: str) -> bool:
         cursor = connection.execute(
             """
             UPDATE classification_jobs
-            SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?
+            SET status = 'pending', attempts = 0, updated_at = ?
             WHERE ticket_id = ? AND status IN ('classified', 'failed')
             """,
             (now, ticket_id),

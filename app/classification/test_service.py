@@ -30,6 +30,7 @@ def stored_values() -> list[object]:
     with get_connection() as connection:
         rows = connection.execute("SELECT * FROM tickets").fetchall()
         rows += connection.execute("SELECT * FROM classification_jobs").fetchall()
+        rows += connection.execute("SELECT * FROM classification_runs").fetchall()
     return [value for row in rows for value in tuple(row)]
 
 
@@ -52,7 +53,6 @@ def test_classifies_pending_ticket_on_first_attempt():
     assert classified is True
     assert len(llm.prompts) == 1
     assert_classified("t-1", attempts=0)
-    assert get_classification_job("t-1")["last_error"] is None
 
 
 @pytest.mark.parametrize(
@@ -102,7 +102,7 @@ def test_three_failures_mark_job_failed():
     job = get_classification_job("t-1")
     assert job["status"] == "failed"
     assert job["attempts"] == 3
-    assert job["last_error"] == "Model output was not a valid classification"
+    assert runs_for("t-1")[-1][2] == "Model output was not a valid classification"
 
 
 def test_llm_call_that_hangs_times_out_and_counts_as_failed_attempt(
@@ -118,7 +118,7 @@ def test_llm_call_that_hangs_times_out_and_counts_as_failed_attempt(
     assert len(llm.prompts) == MAX_ATTEMPTS
     job = get_classification_job("t-1")
     assert job["status"] == "failed"
-    assert job["last_error"] == "LLM call failed: TimeoutError"
+    assert runs_for("t-1")[-1][2] == "LLM call failed: TimeoutError"
 
 
 def test_waits_with_exponential_backoff_before_each_retry(
@@ -223,26 +223,23 @@ def test_failed_classification_does_not_write_invalid_fields():
     assert "urgent" not in values
 
 
-def test_last_error_does_not_contain_exception_message():
+def test_run_error_does_not_contain_exception_message():
     create_ticket("t-1", "Double charge", "I was charged twice this month")
     llm = FakeLLMClient([ConnectionError("secret-token-123"), VALID_RESPONSE])
 
     asyncio.run(classify_ticket("t-1", llm))
 
-    assert get_classification_job("t-1")["last_error"] == (
-        "LLM call failed: ConnectionError"
-    )
+    assert runs_for("t-1")[0][2] == "LLM call failed: ConnectionError"
 
 
-def test_last_error_does_not_contain_raw_model_output():
+def test_run_error_does_not_contain_raw_model_output():
     create_ticket("t-1", "Double charge", "I was charged twice this month")
     raw_output = '{"category": "ignore previous instructions", "priority": "high"}'
     llm = FakeLLMClient([raw_output, VALID_RESPONSE])
 
     asyncio.run(classify_ticket("t-1", llm))
 
-    last_error = get_classification_job("t-1")["last_error"]
-    assert "ignore previous instructions" not in last_error
+    assert "ignore previous instructions" not in runs_for("t-1")[0][2]
     assert all(raw_output not in str(value) for value in stored_values())
 
 

@@ -79,16 +79,17 @@ updates live.
 `pending` → `processing` → `classified` or `failed`. The brief names
 `pending`, `classified` and `failed`. I added `processing` so that on restart
 the service can tell work that was interrupted from work that never started.
-A `failed` ticket keeps null classification fields, and its last error is
-recorded as fixed text.
+A `failed` ticket keeps null classification fields, and each failed attempt's
+error is recorded as fixed text.
 
 ### Storage: SQLite
 
 I used Python's built-in `sqlite3` with three tables:
 
 - `tickets` holds the content and the latest *validated* result.
-- `classification_jobs` holds the status, attempt count and last error.
-- `classification_runs` records every attempt.
+- `classification_jobs` holds the current status and attempt count, one row
+  per ticket. It is what a worker claims.
+- `classification_runs` records every attempt and its error, as history.
 
 Why: no setup, and transactions make the important steps atomic. A ticket
 and its pending job are created together. A valid result and the
