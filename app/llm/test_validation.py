@@ -11,6 +11,7 @@ from app.llm.fake import (
     VALID_RESPONSE,
 )
 from app.llm.validation import (
+    MAX_SUMMARY_LENGTH,
     ClassificationError,
     ClassificationResult,
     parse_classification,
@@ -53,6 +54,12 @@ def test_strips_surrounding_whitespace_from_summary():
     assert parse_classification(output).summary == "Charged twice."
 
 
+def test_accepts_summary_at_maximum_length():
+    output = json.dumps(VALID_OUTPUT | {"summary": "x" * MAX_SUMMARY_LENGTH})
+
+    assert len(parse_classification(output).summary) == MAX_SUMMARY_LENGTH
+
+
 @pytest.mark.parametrize(
     "raw_output",
     [
@@ -69,6 +76,14 @@ def test_strips_surrounding_whitespace_from_summary():
         ),
         pytest.param(
             json.dumps(VALID_OUTPUT | {"extra": "field"}), id="unexpected-field"
+        ),
+        pytest.param(
+            json.dumps(VALID_OUTPUT | {"summary": "x" * (MAX_SUMMARY_LENGTH + 1)}),
+            id="summary-too-long",
+        ),
+        pytest.param(
+            json.dumps(VALID_OUTPUT | {"summary": "Charged twice.\nRefund it."}),
+            id="multi-line-summary",
         ),
     ],
 )

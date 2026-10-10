@@ -1109,7 +1109,7 @@ kbd {
 .status-processing {
   --s: var(--s-processing);
 }
-.status-completed {
+.status-classified {
   --s: var(--s-completed);
 }
 .status-failed {

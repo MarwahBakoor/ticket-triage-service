@@ -59,10 +59,10 @@ def test_startup_reclassifies_pending_and_interrupted_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     initialize_database()
-    for ticket_id in ("pending", "interrupted", "completed", "failed"):
+    for ticket_id in ("pending", "interrupted", "classified", "failed"):
         create_ticket(ticket_id, "Double charge", "I was charged twice")
     with get_connection() as connection:
-        for status in ("processing", "completed", "failed"):
+        for status in ("processing", "classified", "failed"):
             ticket_id = "interrupted" if status == "processing" else status
             connection.execute(
                 "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
@@ -78,9 +78,9 @@ def test_startup_reclassifies_pending_and_interrupted_jobs(
     asyncio.run(scenario())
 
     assert len(llm.prompts) == 2
-    assert get_classification_job("pending")["status"] == "completed"
-    assert get_classification_job("interrupted")["status"] == "completed"
-    assert get_classification_job("completed")["status"] == "completed"
+    assert get_classification_job("pending")["status"] == "classified"
+    assert get_classification_job("interrupted")["status"] == "classified"
+    assert get_classification_job("classified")["status"] == "classified"
     assert get_classification_job("failed")["status"] == "failed"
-    assert get_ticket("completed")["category"] is None
+    assert get_ticket("classified")["category"] is None
     assert get_ticket("failed")["category"] is None

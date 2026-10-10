@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
 from app.db.tickets import get_ticket
-from app.llm.fake import MALFORMED_JSON_RESPONSE, BlockingFakeLLMClient, FakeLLMClient
+from app.llm.fake import (
+    MALFORMED_JSON_RESPONSE,
+    VALID_RESPONSE,
+    BlockingFakeLLMClient,
+    FakeLLMClient,
+)
 from app.main import app
 from app.workers.classification import ClassificationWorkers
 
@@ -145,7 +150,7 @@ def test_get_ticket_returns_classified_ticket(client: TestClient) -> None:
         )
         connection.execute(
             "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
-            ("completed", "t-1"),
+            ("classified", "t-1"),
         )
 
     response = client.get("/tickets/t-1")
@@ -158,7 +163,7 @@ def test_get_ticket_returns_classified_ticket(client: TestClient) -> None:
     assert body["category"] == "account"
     assert body["priority"] == "high"
     assert body["summary"] == "User cannot reset password"
-    assert body["classification_status"] == "completed"
+    assert body["classification_status"] == "classified"
 
 
 def test_get_pending_ticket_matches_created_response(client: TestClient) -> None:
@@ -189,7 +194,7 @@ def classify(ticket_id: str, category: str, priority: str) -> None:
         )
         connection.execute(
             "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
-            ("completed", ticket_id),
+            ("classified", ticket_id),
         )
 
 
@@ -221,7 +226,7 @@ def test_list_tickets_without_filters_returns_all(
     assert [ticket["id"] for ticket in body] == ["t-1", "t-2", "t-3", "t-4"]
     assert body[0]["category"] == "billing"
     assert body[0]["priority"] == "high"
-    assert body[0]["classification_status"] == "completed"
+    assert body[0]["classification_status"] == "classified"
     assert body[3]["category"] is None
     assert body[3]["classification_status"] == "pending"
 
@@ -339,7 +344,7 @@ def test_classification_runs_after_the_create_request_returns(
             )
 
             classified = await client.get("/tickets/t-1")
-            assert classified.json()["classification_status"] == "completed"
+            assert classified.json()["classification_status"] == "classified"
             assert classified.json()["category"] == "billing"
             assert classified.json()["priority"] == "high"
             assert classified.json()["summary"] == "Customer was charged twice."
@@ -415,3 +420,85 @@ def test_concurrent_duplicate_tickets_are_enqueued_once(
     assert idle_workers.queued_count() == 1
     assert count_rows("tickets") == 1
     assert count_rows("classification_jobs") == 1
+
+
+def set_job_status(ticket_id: str, status: str) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
+            (status, ticket_id),
+        )
+
+
+@pytest.mark.parametrize("status", ["classified", "failed"])
+def test_reclassify_returns_finished_ticket_to_pending(
+    client: TestClient, status: str
+) -> None:
+    client.post("/tickets", json=TICKET)
+    set_job_status("t-1", status)
+
+    response = client.post("/tickets/t-1/reclassify")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["classification_status"] == "pending"
+    assert body["category"] is None
+
+
+def test_reclassify_enqueues_ticket_once(idle_workers: ClassificationWorkers) -> None:
+    async def scenario() -> list[httpx.Response]:
+        async with async_client() as client:
+            await post_ticket(client)
+            set_job_status("t-1", "failed")
+            return await asyncio.gather(
+                *(client.post("/tickets/t-1/reclassify") for _ in range(3))
+            )
+
+    responses = asyncio.run(scenario())
+
+    assert sorted(response.status_code for response in responses) == [202, 409, 409]
+    # One id from the submission, one from the reclassification.
+    assert idle_workers.queued_count() == 2
+
+
+@pytest.mark.parametrize("status", ["pending", "processing"])
+def test_reclassify_unfinished_ticket_is_conflict(
+    client: TestClient, status: str
+) -> None:
+    client.post("/tickets", json=TICKET)
+    set_job_status("t-1", status)
+
+    response = client.post("/tickets/t-1/reclassify")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Ticket is still being classified"}
+    assert get_ticket("t-1")["classification_status"] == status
+
+
+def test_reclassify_missing_ticket_is_not_found(client: TestClient) -> None:
+    response = client.post("/tickets/missing/reclassify")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
+
+
+def test_failed_ticket_is_classified_after_reclassify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = FakeLLMClient([MALFORMED_JSON_RESPONSE] * 3 + [VALID_RESPONSE])
+    monkeypatch.setattr(app.state, "llm_client", llm, raising=False)
+
+    async def scenario() -> httpx.Response:
+        async with app.router.lifespan_context(app), async_client() as client:
+            workers = app.state.classification_workers
+            await post_ticket(client)
+            await asyncio.wait_for(workers.join(), TIMEOUT_SECONDS)
+            await client.post("/tickets/t-1/reclassify")
+            await asyncio.wait_for(workers.join(), TIMEOUT_SECONDS)
+            return await client.get("/tickets/t-1")
+
+    body = asyncio.run(scenario()).json()
+
+    assert body["classification_status"] == "classified"
+    assert body["category"] == "billing"
+    assert count_rows("classification_runs") == 4

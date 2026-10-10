@@ -25,6 +25,8 @@ const DEFAULT_ORDER = ORDERS[0].value;
 const VIEWS = { tickets: "Tickets", metrics: "Metrics" };
 const RUN_STATUSES = ["running", "completed", "failed"];
 const RUN_LABELS = { running: "Running", completed: "Completed", failed: "Failed" };
+// Runs reuse the ticket status pills: a completed run classified its ticket.
+const RUN_PILLS = { running: "processing", completed: "classified", failed: "failed" };
 const RECENT_RUNS = 15;
 const LABELS = {
   billing: "Billing",
@@ -36,7 +38,7 @@ const LABELS = {
   low: "Low",
   pending: "Queued",
   processing: "Classifying",
-  completed: "Classified",
+  classified: "Classified",
   failed: "Failed",
 };
 
@@ -319,7 +321,7 @@ function announceFinishedTickets() {
     if (!ticket || ACTIVE.has(ticket.classification_status)) continue;
     state.watched.delete(id);
     const viewAction = state.openId === id ? null : { label: "View ticket", run: () => openTicket(id) };
-    if (ticket.classification_status === "completed") {
+    if (ticket.classification_status === "classified") {
       toast("success", `${id} classified`, `${LABELS[ticket.category]} · ${LABELS[ticket.priority]} priority`, viewAction);
     } else {
       toast("error", `${id} couldn't be classified`, `Gave up after ${MAX_ATTEMPTS} attempts.`, viewAction);
@@ -391,7 +393,7 @@ function renderOverview() {
   const count = (status) => all.filter((t) => t.classification_status === status).length;
   const pending = count("pending");
   const processing = count("processing");
-  const completed = count("completed");
+  const classified = count("classified");
   const failed = count("failed");
   const queued = pending + processing;
 
@@ -410,8 +412,8 @@ function renderOverview() {
       ? `${pending} waiting for a worker`
       : "All caught up";
 
-  setNumber($("#stat-done"), completed);
-  const percent = all.length ? Math.round((completed / all.length) * 100) : 0;
+  setNumber($("#stat-done"), classified);
+  const percent = all.length ? Math.round((classified / all.length) * 100) : 0;
   $("#stat-done-sub").textContent = all.length ? `${percent}% of all tickets` : "—";
   $("#stat-done-meter").style.width = `${percent}%`;
 
@@ -567,7 +569,7 @@ function ticketRow(ticket, index) {
   const previous = state.seen.get(ticket.id);
   const changed = previous != null && previous !== status;
   const summary = {
-    completed: ticket.summary,
+    classified: ticket.summary,
     pending: "Waiting for a classification worker…",
     processing: "The classifier is reading this ticket…",
     failed: `Couldn't be classified after ${MAX_ATTEMPTS} attempts`,
@@ -719,7 +721,7 @@ function formatDuration(run) {
 
 function runRow(run) {
   // Run statuses reuse the ticket status styles: running spins like processing.
-  const pill = statusPill(run.status === "running" ? "processing" : run.status);
+  const pill = statusPill(RUN_PILLS[run.status]);
   pill.lastChild.textContent = RUN_LABELS[run.status];
   return h(
     "tr",
@@ -980,7 +982,7 @@ function popupStatus(status) {
 }
 
 function popupClassification(ticket) {
-  if (ticket.classification_status !== "completed") return null;
+  if (ticket.classification_status !== "classified") return null;
   return h(
     "section",
     { class: "popup-section" },

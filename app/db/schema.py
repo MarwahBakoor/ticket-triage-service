@@ -1,3 +1,5 @@
+import sqlite3
+
 from app.db.connection import get_connection
 
 
@@ -24,7 +26,7 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS classification_jobs (
                 ticket_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL
-                    CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+                    CHECK (status IN ('pending', 'processing', 'classified', 'failed')),
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT NULL,
                 created_at TEXT NOT NULL,
@@ -61,4 +63,20 @@ def initialize_database() -> None:
             CREATE INDEX IF NOT EXISTS classification_runs_by_start
             ON classification_runs (started_at)
             """
+        )
+        _reject_outdated_jobs_table(connection)
+
+
+def _reject_outdated_jobs_table(connection: sqlite3.Connection) -> None:
+    # There are no migrations, and SQLite cannot alter a CHECK constraint. A
+    # database created before `completed` became `classified` would fail on
+    # the first classification, so fail at startup with a clear fix instead.
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("classification_jobs",),
+    ).fetchone()
+    if "'classified'" not in row["sql"]:
+        raise RuntimeError(
+            "The database was created by an older version of this service. "
+            "Delete it (DATABASE_PATH, tickets.db by default) and restart."
         )

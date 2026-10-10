@@ -21,7 +21,12 @@ def client() -> Iterator[TestClient]:
 def classify_tickets(
     monkeypatch: pytest.MonkeyPatch, responses: list[str], ticket_ids: list[str]
 ) -> None:
-    """Submit tickets through the API and wait for the workers to finish."""
+    """Submit tickets through the API and wait for the workers to finish.
+
+    One worker handles the tickets in order, so each takes its scripted
+    responses before the next ticket starts.
+    """
+    monkeypatch.setenv("CLASSIFICATION_WORKERS", "1")
     monkeypatch.setattr(app.state, "llm_client", FakeLLMClient(responses))
 
     async def scenario() -> None:

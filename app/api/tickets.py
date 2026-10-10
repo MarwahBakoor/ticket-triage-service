@@ -10,7 +10,12 @@ from app.api.schemas import (
     TicketPriority,
     TicketResponse,
 )
-from app.db.tickets import create_ticket, get_ticket, list_tickets
+from app.db.tickets import (
+    create_ticket,
+    get_ticket,
+    list_tickets,
+    reset_for_reclassification,
+)
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -108,4 +113,52 @@ def read_ticket(
     stored = get_ticket(ticket_id)
     if stored is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ticket not found")
+    return TicketResponse.model_validate(stored)
+
+
+@router.post(
+    "/{ticket_id}/reclassify",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TicketResponse,
+    summary="Classify a ticket again",
+    description=(
+        "Queue a `classified` or `failed` ticket for a fresh classification, "
+        "for example after a prompt change or a model outage. Its previous "
+        "result is cleared, it gets a new set of attempts, and it is "
+        "returned as `pending`.\n\n"
+        "A ticket that is still `pending` or `processing` returns `409`, so "
+        "repeating the request never queues a ticket twice."
+    ),
+    response_description="The ticket, now pending.",
+    responses=NOT_FOUND_RESPONSE
+    | {
+        status.HTTP_409_CONFLICT: {
+            "description": "The ticket is still pending or processing.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Ticket is still being classified"}
+                }
+            },
+        }
+    },
+)
+async def reclassify_ticket(
+    ticket_id: Annotated[
+        str, Path(description="The id the ticket was submitted with.")
+    ],
+    request: Request,
+) -> TicketResponse:
+    if not await asyncio.to_thread(reset_for_reclassification, ticket_id):
+        if await asyncio.to_thread(get_ticket, ticket_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Ticket not found")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Ticket is still being classified"
+        )
+    # Only the request that reset the job enqueues it, on the event loop thread.
+    workers = getattr(request.app.state, "classification_workers", None)
+    if workers is not None:
+        workers.enqueue(ticket_id)
+    stored = await asyncio.to_thread(get_ticket, ticket_id)
+    if stored is None:
+        raise RuntimeError(f"ticket {ticket_id!r} disappeared after reset")
     return TicketResponse.model_validate(stored)

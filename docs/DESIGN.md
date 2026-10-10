@@ -16,7 +16,7 @@ How the ticket-triage service works and why. For running and using it, see
 
 Operational state lives apart from the ticket so that the ticket only holds
 validated results. Retries, errors and status transitions change the job row
-without touching ticket data, and a validated result plus the `completed`
+without touching ticket data, and a validated result plus the `classified`
 status are written in one transaction. Each run is finished in the same
 transaction as the job change it causes, so runs and jobs always agree.
 Both CHECK constraints and the
@@ -44,17 +44,19 @@ On startup, before workers run:
 - runs still `running` are marked `failed` with the error
   `Interrupted before finishing`. They don't use up an attempt.
 - every `pending` job is enqueued, oldest first.
-- `completed` and `failed` jobs are never enqueued.
+- `classified` and `failed` jobs are never enqueued.
 
 On shutdown, workers are cancelled. Interrupted jobs stay `processing` and are
 recovered on the next start.
 
 ## Retry policy
 
-Each job gets at most 3 attempts. Provider exceptions, malformed JSON and
-validation failures all count as failed attempts and are retried. After the
-third failure the job becomes `failed` and the ticket's classification fields
-stay null. `last_error` holds fixed text such as
+Each job gets at most 3 attempts. Provider exceptions, calls that take longer
+than 30 seconds, malformed JSON and validation failures all count as failed
+attempts. Retries wait 1 s, then 2 s (exponential backoff), so a briefly
+overloaded provider is not hit again at once; the worker stays busy while it
+waits. After the third failure the job becomes `failed` and the ticket's
+classification fields stay null. `last_error` holds fixed text such as
 `LLM call failed: TimeoutError`, never raw model output or exception messages.
 
 ## LLM trust boundary
@@ -66,9 +68,22 @@ raw text -> JSON parse -> Pydantic validation -> persistence
 ```
 
 `parse_classification` validates with a strict Pydantic model: exact allowed
-`category` and `priority` values, a non-empty `summary`, no extra fields. Only
+`category` and `priority` values, a non-empty single-line `summary` of at most
+300 characters, no extra fields. "One sentence" is asked for in the prompt but
+not parsed, because abbreviations such as "e.g." would turn good answers into
+failures. Only
 a validated `ClassificationResult` can reach `complete_classification`. Raw
 output is never stored.
+
+## Reclassification
+
+`POST /tickets/{id}/reclassify` resets a `classified` or `failed` job to
+`pending` with 0 attempts and clears the ticket's classification, in one
+transaction, then queues the ticket. Clearing keeps the rule that a ticket only
+shows a result from its current job; a failed reclassification never leaves a
+stale answer looking current. The reset only matches finished jobs, so a
+repeated or concurrent request gets `409` and the ticket is queued once. Run
+history is kept, and new runs continue the ticket's numbering.
 
 ## Prompt injection
 
@@ -96,18 +111,17 @@ allowed answer. Sample `t-1005` is a regression test covering both cases.
 - **Fake LLM**: the keyword fake is plausible, not accurate. For example, it
   rates `t-1005` high priority because the text says "URGENT". Behavior against
   a real provider (latency, rate limits, output drift) is untested.
-- Classification status is named `completed` rather than `classified`.
-- Database calls in the classification workflow run on the event loop. They
-  are short, but a locked database would briefly block the loop.
+- Every error is retried, including ones that cannot succeed on a retry
+  (such as an invalid API key against a real provider).
 
 ## With more time
 
 - Add a real provider client behind `LLMClient`, chosen by configuration, with
   timeouts and rate-limit handling.
-- Exponential backoff between retries.
 - Graceful shutdown that lets in-flight attempts finish before cancelling.
-- A way to re-run failed jobs or re-classify after a prompt change.
-- Record the prompt/model version with each classification.
+- Record the prompt/model version with each classification, so a prompt
+  change can reclassify only the tickets it affects.
+- Reclassify many tickets at once, and a dashboard button for it.
 - A small labelled evaluation set to measure classifier agreement.
 - Move to Postgres with a lease-based job claim if more than one process is
   needed.

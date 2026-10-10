@@ -18,6 +18,7 @@ from app.db.tickets import (
     mark_job_processing,
     record_failed_attempt,
     recover_unfinished_jobs,
+    reset_for_reclassification,
     start_run,
 )
 from app.llm.validation import ClassificationResult
@@ -113,7 +114,7 @@ def test_failed_job_insert_leaves_no_ticket_row():
             INSERT INTO classification_jobs (ticket_id, status, created_at, updated_at)
             VALUES (?, ?, ?, ?)
             """,
-            ("t-1", "completed", "2026-10-09", "2026-10-09"),
+            ("t-1", "classified", "2026-10-09", "2026-10-09"),
         )
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -131,7 +132,7 @@ def classify(ticket_id: str, category: str, priority: str) -> None:
         )
         connection.execute(
             "UPDATE classification_jobs SET status = ? WHERE ticket_id = ?",
-            ("completed", ticket_id),
+            ("classified", ticket_id),
         )
 
 
@@ -155,9 +156,9 @@ def test_list_tickets_without_filters_returns_all_oldest_first(mixed_tickets):
 
     assert ids(tickets) == ["t-1", "t-2", "t-3", "t-4"]
     assert [ticket["classification_status"] for ticket in tickets] == [
-        "completed",
-        "completed",
-        "completed",
+        "classified",
+        "classified",
+        "classified",
         "pending",
     ]
 
@@ -269,7 +270,7 @@ def test_mark_job_processing_claims_pending_job():
     assert get_classification_job("t-1")["status"] == "processing"
 
 
-@pytest.mark.parametrize("status", ["processing", "completed", "failed"])
+@pytest.mark.parametrize("status", ["processing", "classified", "failed"])
 def test_mark_job_processing_ignores_job_that_is_not_pending(status):
     create_ticket("t-1", "Double charge", "Charged twice")
     set_job_status("t-1", status)
@@ -316,7 +317,7 @@ def test_start_run_numbers_each_ticket_separately(processing_job):
     assert get_run(start_run("t-2"))["run_number"] == 1
 
 
-@pytest.mark.parametrize("status", ["pending", "completed", "failed"])
+@pytest.mark.parametrize("status", ["pending", "classified", "failed"])
 def test_start_run_refuses_job_that_is_not_processing(status):
     create_ticket("t-1", "Double charge", "Charged twice")
     set_job_status("t-1", status)
@@ -421,15 +422,15 @@ def test_complete_classification_updates_ticket_job_and_run(processing_job):
     assert ticket["category"] == "billing"
     assert ticket["priority"] == "high"
     assert ticket["summary"] == "Customer was charged twice."
-    assert ticket["classification_status"] == "completed"
-    assert job["status"] == "completed"
+    assert ticket["classification_status"] == "classified"
+    assert job["status"] == "classified"
     assert run["status"] == "completed"
     assert run["error"] is None
     assert ticket["updated_at"] != OLD_TIMESTAMP
     assert ticket["updated_at"] == job["updated_at"] == run["finished_at"]
 
 
-@pytest.mark.parametrize("status", ["pending", "completed", "failed"])
+@pytest.mark.parametrize("status", ["pending", "classified", "failed"])
 def test_complete_classification_ignores_job_that_is_not_processing(
     processing_job, status
 ):
@@ -512,7 +513,7 @@ def test_schema_rejects_running_run_with_finish_time():
         )
 
 
-@pytest.mark.parametrize("status", ["completed", "failed"])
+@pytest.mark.parametrize("status", ["classified", "failed"])
 def test_recover_unfinished_jobs_skips_finished_job(status):
     create_ticket("t-1", "Double charge", "Charged twice")
     set_job_status("t-1", status)
@@ -524,8 +525,78 @@ def test_recover_unfinished_jobs_skips_finished_job(status):
 def test_recover_unfinished_jobs_returns_only_unfinished_jobs_oldest_first():
     for ticket_id in ("t-1", "t-2", "t-3", "t-4"):
         create_ticket(ticket_id, "Subject", "Body")
-    set_job_status("t-1", "completed")
+    set_job_status("t-1", "classified")
     set_job_status("t-2", "processing")
     set_job_status("t-3", "failed")
 
     assert recover_unfinished_jobs() == ["t-2", "t-4"]
+
+
+def finished_job(status: str) -> None:
+    create_ticket("t-1", "Double charge", "Charged twice")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE tickets SET category = ?, priority = ?, summary = ?
+            WHERE id = ?
+            """,
+            ("billing", "high", "Charged twice.", "t-1"),
+        )
+        connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = ?, attempts = ?, last_error = ?
+            WHERE ticket_id = ?
+            """,
+            (status, 3, "Model output was not a valid classification", "t-1"),
+        )
+
+
+@pytest.mark.parametrize("status", ["classified", "failed"])
+def test_reset_for_reclassification_returns_finished_job_to_pending(status):
+    finished_job(status)
+
+    assert reset_for_reclassification("t-1") is True
+
+    ticket = get_ticket("t-1")
+    assert ticket["classification_status"] == "pending"
+    assert (ticket["category"], ticket["priority"], ticket["summary"]) == (
+        None,
+        None,
+        None,
+    )
+    job = get_classification_job("t-1")
+    assert job["attempts"] == 0
+    assert job["last_error"] is None
+
+
+@pytest.mark.parametrize("status", ["pending", "processing"])
+def test_reset_for_reclassification_leaves_unfinished_job_alone(status):
+    create_ticket("t-1", "Double charge", "Charged twice")
+    set_job_status("t-1", status)
+
+    assert reset_for_reclassification("t-1") is False
+
+    assert get_classification_job("t-1")["status"] == status
+
+
+def test_reset_for_reclassification_of_missing_ticket_returns_false():
+    assert reset_for_reclassification("missing") is False
+
+
+def test_reclassified_job_numbers_its_runs_after_earlier_ones():
+    create_ticket("t-1", "Double charge", "Charged twice")
+    mark_job_processing("t-1")
+    run_id = start_run("t-1")
+    record_failed_attempt("t-1", run_id, "LLM call failed: TimeoutError")
+    mark_job_failed("t-1")
+
+    reset_for_reclassification("t-1")
+    mark_job_processing("t-1")
+    start_run("t-1")
+
+    with get_connection() as connection:
+        numbers = connection.execute(
+            "SELECT run_number FROM classification_runs ORDER BY id"
+        ).fetchall()
+    assert [row["run_number"] for row in numbers] == [1, 2]

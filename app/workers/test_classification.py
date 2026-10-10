@@ -38,7 +38,7 @@ def test_worker_classifies_enqueued_ticket():
 
     asyncio.run(scenario())
 
-    assert get_ticket("t-1")["classification_status"] == "completed"
+    assert get_ticket("t-1")["classification_status"] == "classified"
     assert get_ticket("t-1")["category"] == "billing"
 
 
@@ -58,7 +58,7 @@ def test_worker_keeps_running_after_a_failed_ticket():
     asyncio.run(scenario())
 
     assert get_classification_job("t-1")["status"] == "failed"
-    assert get_classification_job("t-2")["status"] == "completed"
+    assert get_classification_job("t-2")["status"] == "classified"
 
 
 @pytest.mark.parametrize("worker_count", [1, DEFAULT_WORKER_COUNT])
@@ -88,7 +88,7 @@ def test_runs_at_most_worker_count_classifications_at_once(worker_count):
     assert llm.max_in_flight == worker_count
     assert len(llm.prompts) == len(ticket_ids)
     for ticket_id in ticket_ids:
-        assert get_classification_job(ticket_id)["status"] == "completed"
+        assert get_classification_job(ticket_id)["status"] == "classified"
 
 
 def test_stop_cancels_workers_blocked_on_the_llm():

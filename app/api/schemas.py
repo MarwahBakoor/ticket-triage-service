@@ -27,7 +27,7 @@ class TicketOrder(StrEnum):
 class ClassificationJobStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
-    COMPLETED = "completed"
+    CLASSIFIED = "classified"
     FAILED = "failed"
 
 
@@ -66,7 +66,7 @@ class TicketResponse(BaseModel):
                     "summary": "Customer was charged twice and wants a refund.",
                     "created_at": "2026-10-10T11:08:58.961142Z",
                     "updated_at": "2026-10-10T11:08:58.962843Z",
-                    "classification_status": "completed",
+                    "classification_status": "classified",
                 }
             ]
         }
@@ -90,7 +90,7 @@ class TicketResponse(BaseModel):
     )
     classification_status: ClassificationJobStatus = Field(
         description=(
-            "pending → processing → completed or failed. failed means no valid "
+            "pending → processing → classified or failed. failed means no valid "
             "classification after 3 attempts."
         )
     )

@@ -6,6 +6,7 @@ import pytest
 
 from app.llm.client import LLMClient
 from app.llm.fake import (
+    BROKEN_RESPONSES,
     EMPTY_SUMMARY_RESPONSE,
     INVALID_CATEGORY_RESPONSE,
     INVALID_PRIORITY_RESPONSE,
@@ -119,14 +120,37 @@ def test_keyword_fake_returns_valid_plausible_classifications_for_samples():
     assert results["t-1008"].summary == "Customer wrote in about: asdf."
 
 
-def test_keyword_fake_returns_malformed_json_every_nth_call():
+def test_keyword_fake_returns_a_broken_response_every_nth_call():
     client = KeywordFakeLLMClient(broken_every=2)
     prompt = build_classification_prompt("Charged twice", "Please refund")
 
     outputs = [classify(client, prompt) for _ in range(4)]
 
-    assert outputs[1] == MALFORMED_JSON_RESPONSE
-    assert outputs[3] == MALFORMED_JSON_RESPONSE
     assert parse_classification(outputs[0]).category == "billing"
+    assert parse_classification(outputs[2]).category == "billing"
+    for broken in (outputs[1], outputs[3]):
+        with pytest.raises(ClassificationError):
+            parse_classification(broken)
+
+
+def test_keyword_fake_cycles_through_every_kind_of_broken_response():
+    client = KeywordFakeLLMClient(broken_every=1)
+    prompt = build_classification_prompt("Charged twice", "Please refund")
+
+    outputs = [classify(client, prompt) for _ in range(len(BROKEN_RESPONSES))]
+
+    assert outputs == list(BROKEN_RESPONSES)
+
+
+@pytest.mark.parametrize("broken", BROKEN_RESPONSES)
+def test_every_broken_response_is_rejected_by_validation(broken):
     with pytest.raises(ClassificationError):
-        parse_classification(outputs[1])
+        parse_classification(broken)
+
+
+def test_keyword_fake_summary_is_a_single_line():
+    client = KeywordFakeLLMClient()
+
+    result = keyword_classification(client, "", "Line one\nline two\r\nline three")
+
+    assert result.summary == "Customer wrote in about: Line one line two line three."

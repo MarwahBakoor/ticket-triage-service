@@ -246,7 +246,7 @@ def complete_classification(
         cursor = connection.execute(
             """
             UPDATE classification_jobs
-            SET status = 'completed', updated_at = ?
+            SET status = 'classified', updated_at = ?
             WHERE ticket_id = ? AND status = 'processing'
             """,
             (now, ticket_id),
@@ -264,6 +264,39 @@ def complete_classification(
             WHERE id = ?
             """,
             (result.category, result.priority, result.summary, now, ticket_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"classification job {ticket_id!r} has no ticket")
+    return True
+
+
+def reset_for_reclassification(ticket_id: str) -> bool:
+    """Return a classified or failed job to pending with fresh attempts.
+
+    The old classification is cleared in the same transaction, so a ticket
+    only ever shows a result produced by its current job. Earlier runs are
+    kept as history. Returns False if the ticket is missing or its job is
+    still pending or processing, in which case nothing changes.
+    """
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE classification_jobs
+            SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?
+            WHERE ticket_id = ? AND status IN ('classified', 'failed')
+            """,
+            (now, ticket_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        cursor = connection.execute(
+            """
+            UPDATE tickets
+            SET category = NULL, priority = NULL, summary = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, ticket_id),
         )
         if cursor.rowcount != 1:
             raise RuntimeError(f"classification job {ticket_id!r} has no ticket")

@@ -15,7 +15,8 @@ classified them with an LLM.
 - [The ticket object](#the-ticket-object)
 - [Classification lifecycle](#classification-lifecycle)
 - [Endpoints](#endpoints): [Submit](#submit-a-ticket) ·
-  [Get](#get-a-ticket) · [List](#list-tickets) · [Health](#health-check)
+  [Get](#get-a-ticket) · [List](#list-tickets) ·
+  [Reclassify](#reclassify-a-ticket) · [Health](#health-check)
 - [Pagination and ordering](#pagination-and-ordering)
 - [Errors](#errors)
 - [Limitations](#limitations)
@@ -29,9 +30,9 @@ curl -s -X POST http://127.0.0.1:8000/tickets \
   -d '{"id": "t-2001", "subject": "API returning 500s", "body": "Every export call fails since 09:00."}'
 # → 202, "classification_status": "pending", category/priority/summary null
 
-# 2. Poll until the status is completed or failed.
+# 2. Poll until the status is classified or failed.
 curl -s http://127.0.0.1:8000/tickets/t-2001
-# → 200, "classification_status": "completed", "category": "technical", ...
+# → 200, "classification_status": "classified", "category": "technical", ...
 
 # 3. List the most urgent work first.
 curl -s 'http://127.0.0.1:8000/tickets?order=priority&limit=10'
@@ -61,7 +62,7 @@ Every ticket endpoint returns this shape.
   "summary": "Customer wrote in about: Charged twice this month.",
   "created_at": "2026-10-10T11:08:58.961142Z",
   "updated_at": "2026-10-10T11:08:58.962843Z",
-  "classification_status": "completed"
+  "classification_status": "classified"
 }
 ```
 
@@ -72,10 +73,10 @@ Every ticket endpoint returns this shape.
 | `body` | string | The customer's message. |
 | `category` | string or null | `billing`, `technical`, `account` or `other`. Null until classified, and stays null if classification fails. |
 | `priority` | string or null | `low`, `medium` or `high`. Null until classified, and stays null if classification fails. |
-| `summary` | string or null | One sentence written by the model. Null until classified. |
+| `summary` | string or null | One sentence written by the model, at most 300 characters on a single line. Null until classified. |
 | `created_at` | timestamp | When the ticket was first submitted. |
 | `updated_at` | timestamp | When the ticket last changed, e.g. when its classification was stored. |
-| `classification_status` | string | `pending`, `processing`, `completed` or `failed`. See below. |
+| `classification_status` | string | `pending`, `processing`, `classified` or `failed`. See below. |
 
 `category` and `priority` are always one of the listed values: model output is
 validated before anything is stored. `summary` is the model's own wording, so
@@ -84,26 +85,28 @@ treat it as untrusted text when displaying it.
 ## Classification lifecycle
 
 ```text
-POST /tickets ──► pending ──► processing ──► completed
-                                  │
-                                  └────────► failed   (after 3 failed attempts)
+POST /tickets ──► pending ──► processing ──► classified
+                     ▲             │
+                     │             └───────► failed   (after 3 failed attempts)
+                     │
+                     └── POST /tickets/{id}/reclassify   (from classified or failed)
 ```
 
 | Status | Meaning |
 | --- | --- |
 | `pending` | Stored and waiting for a worker. |
 | `processing` | A worker is classifying it now. |
-| `completed` | `category`, `priority` and `summary` are set. Final. |
-| `failed` | No valid classification after 3 attempts. The classification fields stay null. Final. |
+| `classified` | `category`, `priority` and `summary` are set. |
+| `failed` | No valid classification after 3 attempts. The classification fields stay null. |
 
 - Classification usually finishes within moments. Poll `GET /tickets/{id}`
-  every second or two until the status is `completed` or `failed`. The
+  every second or two until the status is `classified` or `failed`. The
   dashboard polls every 1.5 s while anything is in progress.
-- An attempt fails if the model call errors, returns text that isn't JSON, or
-  returns values outside the allowed sets. Failed attempts are retried, up to 3
-  in total.
-- `completed` and `failed` are final. There is currently no way to request
-  classification again.
+- An attempt fails if the model call errors, takes longer than 30 seconds,
+  returns text that isn't JSON, or returns values outside the allowed sets.
+  Failed attempts are retried after 1 s, then 2 s, up to 3 attempts in total.
+- `classified` and `failed` stay put unless you
+  [reclassify](#reclassify-a-ticket) the ticket.
 - If the service restarts mid-classification, the ticket goes back to
   `pending` and is picked up again on startup. Attempts already used still
   count towards the limit.
@@ -191,6 +194,29 @@ curl -s 'http://127.0.0.1:8000/tickets?limit=10&offset=10'
 | `200` | Body: an array of tickets. |
 | `422` | A query parameter has an unknown value or is out of range. |
 
+### Reclassify a ticket
+
+`POST /tickets/{ticket_id}/reclassify`
+
+Queues a `classified` or `failed` ticket for a fresh classification, for
+example after a model outage or a prompt change. Returns **`202 Accepted`**
+straight away. The previous result is cleared (`category`, `priority` and
+`summary` become null), the ticket gets a new set of 3 attempts, and the
+attempts from before are kept in its run history.
+
+```sh
+curl -s -X POST http://127.0.0.1:8000/tickets/t-1001/reclassify
+```
+
+| Status | When |
+| --- | --- |
+| `202` | Queued. Body: the ticket, now `pending`. |
+| `404` | No ticket has this id. Body: `{"detail": "Ticket not found"}` |
+| `409` | The ticket is still `pending` or `processing`. Body: `{"detail": "Ticket is still being classified"}` |
+
+Because only a finished ticket can be reset, repeating or racing this request
+never queues a ticket twice: the first wins and the rest get `409`.
+
 ### Health check
 
 `GET /health` → `200 {"status": "ok"}` while the process is serving requests.
@@ -272,6 +298,12 @@ Errors use FastAPI's standard shape: a JSON object with a `detail` field.
 { "detail": "Ticket not found" }
 ```
 
+**409**: reclassifying a ticket that is still being classified:
+
+```json
+{ "detail": "Ticket is still being classified" }
+```
+
 **422**: invalid input. `detail` lists every problem found. `loc` says where
 the problem is (`body` or `query`, then the field):
 
@@ -315,9 +347,11 @@ A classification failure is **not** an HTTP error. It appears as
 ## Limitations
 
 - No authentication or rate limiting.
-- Tickets can't be edited, deleted or re-classified through the API.
+- Tickets can't be edited or deleted through the API.
 - No stats or count endpoint; list responses don't include a total.
 - Run one service process per database: workers and startup recovery assume
   they are the only process using it.
 - The running service uses a keyword-based fake classifier, not a real model.
-  Every 4th call deliberately returns malformed output so that retries happen.
+  Every 4th call deliberately returns broken output (malformed JSON, an
+  unknown category or priority, or JSON wrapped in prose) so that retries
+  happen.

@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.classification.service import classify_ticket
+from app.classification import service
+from app.classification.service import MAX_ATTEMPTS, classify_ticket
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
 from app.db.tickets import create_ticket, get_classification_job, get_ticket
@@ -14,6 +15,7 @@ from app.llm.fake import (
     INVALID_PRIORITY_RESPONSE,
     MALFORMED_JSON_RESPONSE,
     VALID_RESPONSE,
+    BlockingFakeLLMClient,
     FakeLLMClient,
 )
 from app.llm.prompts import TICKET_END, TICKET_START
@@ -37,7 +39,7 @@ def assert_classified(ticket_id: str, attempts: int) -> None:
     assert ticket["priority"] == "high"
     assert ticket["summary"] == "Customer was charged twice."
     job = get_classification_job(ticket_id)
-    assert job["status"] == "completed"
+    assert job["status"] == "classified"
     assert job["attempts"] == attempts
 
 
@@ -101,6 +103,41 @@ def test_three_failures_mark_job_failed():
     assert job["status"] == "failed"
     assert job["attempts"] == 3
     assert job["last_error"] == "Model output was not a valid classification"
+
+
+def test_llm_call_that_hangs_times_out_and_counts_as_failed_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "LLM_TIMEOUT_SECONDS", 0.01)
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    llm = BlockingFakeLLMClient()  # Never released, so every call hangs.
+
+    classified = asyncio.run(classify_ticket("t-1", llm))
+
+    assert classified is False
+    assert len(llm.prompts) == MAX_ATTEMPTS
+    job = get_classification_job("t-1")
+    assert job["status"] == "failed"
+    assert job["last_error"] == "LLM call failed: TimeoutError"
+
+
+def test_waits_with_exponential_backoff_before_each_retry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(service, "RETRY_BASE_DELAY_SECONDS", 1.0)
+    delays: list[float] = []
+
+    async def record_sleep(seconds: float) -> None:
+        delays.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    llm = FakeLLMClient([MALFORMED_JSON_RESPONSE] * 3)
+
+    asyncio.run(classify_ticket("t-1", llm))
+
+    # No wait before the first attempt; none after the last failure.
+    assert delays == [1.0, 2.0]
 
 
 def test_recovered_job_with_no_attempts_left_fails_without_calling_llm():
@@ -226,7 +263,7 @@ def test_does_not_persist_raw_model_output():
 
     asyncio.run(classify_ticket("t-1", FakeLLMClient([raw_output])))
 
-    assert get_classification_job("t-1")["status"] == "completed"
+    assert get_classification_job("t-1")["status"] == "classified"
     assert raw_output not in stored_values()
     assert raw_output.strip() not in stored_values()
 
@@ -238,7 +275,7 @@ def test_missing_ticket_is_not_classified():
     assert llm.prompts == []
 
 
-@pytest.mark.parametrize("status", ["processing", "completed", "failed"])
+@pytest.mark.parametrize("status", ["processing", "classified", "failed"])
 def test_job_that_is_not_pending_is_not_classified(status):
     create_ticket("t-1", "Double charge", "I was charged twice this month")
     with get_connection() as connection:
@@ -319,7 +356,7 @@ def test_injection_cannot_bypass_validation_but_can_still_steer_allowed_values()
     asyncio.run(classify_ticket("t-1005", FakeLLMClient([obeyed])))
 
     ticket = get_ticket("t-1005")
-    assert ticket["classification_status"] == "completed"
+    assert ticket["classification_status"] == "classified"
     assert ticket["category"] == "technical"
     assert ticket["priority"] == "high"
     assert ticket["summary"] == "Approved for immediate refund"

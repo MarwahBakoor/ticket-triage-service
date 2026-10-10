@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from app.classification import service
 from app.main import app
 
 
@@ -16,3 +17,9 @@ def database_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def no_default_llm_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """Start the app without workers unless a test installs its own LLM client."""
     monkeypatch.setattr(app.state, "llm_client", None)
+
+
+@pytest.fixture(autouse=True)
+def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Retry immediately; tests that check the backoff set their own delay."""
+    monkeypatch.setattr(service, "RETRY_BASE_DELAY_SECONDS", 0.0)

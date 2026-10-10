@@ -31,6 +31,15 @@ INVALID_PRIORITY_RESPONSE = json.dumps(
 EMPTY_SUMMARY_RESPONSE = json.dumps(
     {"category": "billing", "priority": "high", "summary": ""}
 )
+PROSE_WRAPPED_RESPONSE = f"Sure! Here is the classification:\n{VALID_RESPONSE}"
+
+# The ways a real model's output tends to go wrong, cycled by the keyword fake.
+BROKEN_RESPONSES = (
+    MALFORMED_JSON_RESPONSE,
+    INVALID_CATEGORY_RESPONSE,
+    INVALID_PRIORITY_RESPONSE,
+    PROSE_WRAPPED_RESPONSE,
+)
 
 
 class FakeLLMClient:
@@ -94,8 +103,9 @@ class KeywordFakeLLMClient:
     """Classify by keyword matching so the service runs without a real model.
 
     Its answers are plausible, not accurate: like a real model, it can be
-    steered by ticket text. Every `broken_every`-th call returns malformed
-    JSON so the retry path runs during local use; 0 disables that.
+    steered by ticket text. Every `broken_every`-th call returns one of
+    BROKEN_RESPONSES, in turn, so the retry path runs during local use; 0
+    disables that.
     """
 
     def __init__(self, broken_every: int = 0) -> None:
@@ -103,11 +113,14 @@ class KeywordFakeLLMClient:
             raise ValueError("broken_every must not be negative")
         self._broken_every = broken_every
         self._calls = 0
+        self._broken = 0
 
     async def classify(self, prompt: str) -> str:
         self._calls += 1
         if self._broken_every and self._calls % self._broken_every == 0:
-            return MALFORMED_JSON_RESPONSE
+            response = BROKEN_RESPONSES[self._broken % len(BROKEN_RESPONSES)]
+            self._broken += 1
+            return response
 
         ticket = json.loads(prompt.split(TICKET_START)[1].split(TICKET_END)[0])
         subject, body = ticket["subject"], ticket["body"]
@@ -122,7 +135,7 @@ class KeywordFakeLLMClient:
             priority = "high"
         else:
             priority = "medium"
-        topic = (subject.strip() or body.strip()[:80]).rstrip(".")
+        topic = " ".join((subject.strip() or body.strip())[:80].split()).rstrip(".")
         summary = f"Customer wrote in about: {topic}."
         return json.dumps(
             {"category": category, "priority": priority, "summary": summary}
