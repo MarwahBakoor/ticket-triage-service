@@ -6,7 +6,7 @@ from app.api.schemas import RunResponse, RunStatus, RunSummary
 from app.db.runs import count_runs_by_status, list_runs
 
 # Internal: feeds the dashboard's metrics view. Not part of the public API, so
-# it is left out of the OpenAPI schema and docs/API.md and may change freely.
+# it is left out of the OpenAPI schema and may change freely.
 # The service has no authentication, so this hides the routes rather than
 # protecting them.
 router = APIRouter(prefix="/internal/runs", include_in_schema=False)

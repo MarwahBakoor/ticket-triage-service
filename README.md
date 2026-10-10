@@ -49,8 +49,8 @@ curl "http://127.0.0.1:8000/tickets?category=technical&priority=high&limit=10&of
 curl -X POST http://127.0.0.1:8000/tickets/t-2001/reclassify
 ```
 
-Every endpoint, status code and error is described in
-[docs/API.md](docs/API.md).
+Every endpoint, parameter and status code is listed at
+<http://127.0.0.1:8000/docs>, where you can also try them out.
 
 ## How it works
 
@@ -80,24 +80,15 @@ SQLite needs no setup, and its transactions keep the important steps atomic.
 
 ### Background classification
 
-`POST /tickets` only saves the ticket as `pending`, so classification never
-runs inside the request. The database is the queue: workers poll it, claim
-the ticket that has waited longest, and classify it. When nothing is pending,
+`POST /tickets` saves the ticket as `pending`, so classification never
+runs inside the request.
+The database is the queue: workers poll it, claim the ticket that has waited longest, and classify it. When nothing is pending,
 a worker sleeps for a second before asking again, so a new ticket is picked up
 within about a second.
 
-Because every saved ticket is in the database, none can be missed: there is no
-separate queue to fall out of step with it. This needs no broker or extra
-process. The cost is that idle workers query the database once a second, and
-only one service process may use a database, because startup recovery
-assumes no other process is working on jobs.
-
 ### Concurrency
 
-A fixed pool of `CLASSIFICATION_WORKERS` tasks (4 by default) classifies
-tickets, each handling one ticket at a time. A fixed pool keeps the number of
-simultaneous model calls under a provider's rate limits and bounds cost.
-Database calls run in a thread so they never block the event loop.
+A fixed pool of `CLASSIFICATION_WORKERS` tasks (4 by default) classifies tickets, each handling one ticket at a time.
 
 ### Restarts
 
@@ -105,12 +96,6 @@ On startup, before any worker runs:
 
 - jobs left in `processing` go back to `pending`, where workers find them;
 - their unfinished runs are recorded as failed.
-
-The attempt count is kept, so a ticket can't escape the retry limit by
-crashing the service; the interrupted attempt itself is not counted. On
-shutdown, workers are cancelled and in-flight tickets resume on the next
-start. A model call can therefore happen twice for one attempt: processing is
-at-least-once, and work is never lost.
 
 ### Retries and failure
 
@@ -128,26 +113,7 @@ Retries wait 1 s, then 2 s. After the third failure the ticket is `failed`.
 `POST /tickets/{id}/reclassify` gives a `classified` or `failed` ticket a fresh
 set of attempts, for example after an outage or a prompt change. It also
 appears as a button in the dashboard's ticket view. It clears the old result
-in the same transaction, so a ticket never shows a stale answer. A ticket that
-is still in progress returns `409`, so repeating the request changes nothing.
-
-### Model output validation
-
-Model output is treated as untrusted text. It goes from raw text, through a
-strict Pydantic model, to the database, and only a validated
-`ClassificationResult` can reach the function that stores a result. The
-validation rejects:
-
-- categories and priorities outside the allowed sets, including wrong case;
-- missing or extra fields;
-- non-string summaries;
-- summaries that are empty, longer than 300 characters, or more than one
-  line.
-
-"One sentence" is requested in the prompt but not parsed, because
-abbreviations like "e.g." would make good answers fail. Raw output and
-exception messages are never stored; errors are fixed strings such as
-`Model output was not a valid classification`.
+in the same transaction, so a ticket never shows a stale answer.
 
 ### The model
 
@@ -158,19 +124,6 @@ category or priority, or JSON wrapped in prose), so retries happen in normal
 use. A real provider would replace it by implementing the same `LLMClient`
 interface.
 
-### Prompt injection
-
-The ticket goes into the prompt as JSON inside `<ticket>` tags, with `<`
-escaped so it can't close the tag, and the instructions say it is data and
-must not be obeyed. That reduces the risk but does not prevent injection.
-
-Validation is what protects the stored data: an injected ticket cannot get a
-disallowed value stored. It _can_ still steer the model to a wrong but allowed
-answer. Sample t-1005 shows this, and tests cover both cases: the keyword
-stand-in rates t-1005 `high` because it says "URGENT", and a real model might
-write the summary the ticket asks for. The summary is model text, so the
-dashboard only ever inserts it as text, never as HTML.
-
 ## Development
 
 ```sh
@@ -178,10 +131,6 @@ uv run pytest                 # tests
 uv run ruff check .           # lint
 uv run ruff format --check .  # formatting
 ```
-
-Tests sit next to the code they cover (`app/**/test_*.py`). Each one uses a
-temporary SQLite database and a scripted fake LLM, never `tickets.db` or a live
-model.
 
 ```text
 app/
@@ -197,5 +146,4 @@ app/
 frontend/               Dashboard (plain HTML/CSS/JS, no build step)
 sample_data/            Ten sample tickets
 scripts/load_samples.py Loads them into a running service
-docs/                   API reference and design notes
 ```
