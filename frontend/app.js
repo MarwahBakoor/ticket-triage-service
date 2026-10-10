@@ -109,6 +109,7 @@ const state = {
   lastUpdated: null,
   seen: new Map(), // ticket id -> last known status, to highlight changes
   watched: new Set(), // tickets submitted here, announced when they finish
+  reclassifying: new Set(), // ids with a reclassify request in flight
   openId: null,
   openMissing: false,
 };
@@ -996,6 +997,67 @@ function popupClassification(ticket) {
   );
 }
 
+// Only a finished ticket can be reclassified; the API answers 409 otherwise.
+const RECLASSIFIABLE = new Set(["classified", "failed"]);
+
+function popupActions(ticket) {
+  if (!RECLASSIFIABLE.has(ticket.classification_status)) return null;
+  const busy = state.reclassifying.has(ticket.id);
+  return h(
+    "div",
+    { class: "popup-actions" },
+    h(
+      "button",
+      {
+        class: "btn btn-ghost btn-sm",
+        type: "button",
+        disabled: busy,
+        onclick: () => reclassifyTicket(ticket.id),
+      },
+      busy ? h("span", { class: "spinner", "aria-hidden": "true" }) : icon("refresh"),
+      busy ? "Reclassifying…" : "Reclassify",
+    ),
+    h(
+      "span",
+      { class: "popup-actions-hint" },
+      ticket.classification_status === "failed"
+        ? `Try again with a fresh ${MAX_ATTEMPTS} attempts.`
+        : "Classify again. The current result is cleared until the new one arrives.",
+    ),
+  );
+}
+
+async function reclassifyTicket(id) {
+  if (state.reclassifying.has(id)) return;
+  state.reclassifying.add(id);
+  renderPopup();
+  try {
+    const ticket = await api(`/tickets/${encodeURIComponent(id)}/reclassify`, { method: "POST" });
+    const index = state.all.findIndex((t) => t.id === ticket.id);
+    if (index === -1) state.all.push(ticket);
+    else state.all[index] = ticket;
+    state.watched.add(id);
+    toast("success", `${id} is queued again`, "You'll get a heads-up here when it's classified.");
+    refresh();
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      toast("info", `${id} is already being classified`, "Wait for it to finish, then try again.");
+      refresh();
+    } else if (error instanceof ApiError && error.status === 404) {
+      toast("error", `${id} no longer exists`);
+    } else {
+      toast(
+        "error",
+        `Couldn't reclassify ${id}`,
+        error instanceof ApiError ? `The server answered ${error.status}.` : "Couldn't reach the API. Try again in a moment.",
+      );
+    }
+  } finally {
+    state.reclassifying.delete(id);
+    renderPopup();
+  }
+}
+
 function renderPopup() {
   const id = state.openId;
   if (!id) return;
@@ -1040,6 +1102,7 @@ function renderPopup() {
       ),
       popupStatus(ticket.classification_status),
       popupClassification(ticket),
+      popupActions(ticket),
       h(
         "section",
         { class: "popup-section" },

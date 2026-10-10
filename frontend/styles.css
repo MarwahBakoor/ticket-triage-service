@@ -1374,6 +1374,18 @@ dialog[open] {
   flex: none;
 }
 
+.popup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.popup-actions-hint {
+  color: var(--text-faint);
+  font-size: 0.82rem;
+}
+
 .popup-section h3 {
   color: var(--text-faint);
   font-size: 0.74rem;

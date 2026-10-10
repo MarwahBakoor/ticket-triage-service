@@ -63,9 +63,9 @@ curl -X POST http://127.0.0.1:8000/tickets/t-2001/reclassify
 Every endpoint, status code and error is described in
 [docs/API.md](docs/API.md).
 
-The **dashboard** shows the ticket list with filters, each ticket's details,
-and a Metrics tab with every classification attempt ("run") and its error. It
-updates live.
+The **dashboard** shows the ticket list with filters, each ticket's details
+(with a **Reclassify** button once it is classified or failed), and a Metrics
+tab with every classification attempt ("run") and its error. It updates live.
 
 | Setting | Default | What it does |
 | --- | --- | --- |

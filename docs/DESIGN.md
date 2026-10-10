@@ -93,7 +93,8 @@ transaction, then queues the ticket. Clearing keeps the rule that a ticket only
 shows a result from its current job; a failed reclassification never leaves a
 stale answer looking current. The reset only matches finished jobs, so a
 repeated or concurrent request gets `409` and the ticket is queued once. Run
-history is kept, and new runs continue the ticket's numbering.
+history is kept, and new runs continue the ticket's numbering. The dashboard's
+ticket popup offers a Reclassify button for classified and failed tickets.
 
 ## Prompt injection
 
@@ -131,7 +132,7 @@ allowed answer. Sample `t-1005` is a regression test covering both cases.
 - Graceful shutdown that lets in-flight attempts finish before cancelling.
 - Record the prompt/model version with each classification, so a prompt
   change can reclassify only the tickets it affects.
-- Reclassify many tickets at once, and a dashboard button for it.
+- Reclassify many tickets at once, rather than one at a time.
 - A small labelled evaluation set to measure classifier agreement.
 - Move to Postgres with a lease-based job claim if more than one process is
   needed.
