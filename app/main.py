@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app import constants
 from app.api import runs, tickets
 from app.db.schema import initialize_database
-from app.db.tickets import recover_unfinished_jobs
+from app.db.tickets import recover_interrupted_jobs
 from app.llm.client import LLMClient
 from app.llm.keyword import KeywordLLMClient
 from app.workers.classification import ClassificationWorkers, worker_count_from_env
@@ -27,22 +27,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     llm: LLMClient | None = getattr(app.state, "llm_client", None)
     if llm is None:
         logger.warning("No LLM client configured; new tickets will stay pending")
-        app.state.classification_workers = None
         yield
         return
 
+    # Workers poll the database for pending tickets. Jobs a stopped process
+    # left processing go back to pending first, so workers claim them again.
+    await asyncio.to_thread(recover_interrupted_jobs)
     workers = ClassificationWorkers(llm, worker_count_from_env())
-    app.state.classification_workers = workers
-    # SQLite is the durable record; the queue is rebuilt from it on startup.
-    for ticket_id in await asyncio.to_thread(recover_unfinished_jobs):
-        workers.enqueue(ticket_id)
     workers.start()
     try:
         yield
     finally:
         await workers.stop()
-        # Stopped workers must not receive tickets from a later request.
-        app.state.classification_workers = None
 
 
 app = FastAPI(

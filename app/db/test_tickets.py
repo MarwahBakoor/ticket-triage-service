@@ -1,4 +1,5 @@
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -8,15 +9,15 @@ from app.db.schema import initialize_database
 from app.db.tickets import (
     JOB_NOT_PROCESSING,
     RUN_INTERRUPTED,
+    claim_next_job,
     complete_classification,
     create_ticket,
     get_classification_job,
     get_ticket,
     list_tickets,
     mark_job_failed,
-    mark_job_processing,
     record_failed_attempt,
-    recover_unfinished_jobs,
+    recover_interrupted_jobs,
     reset_for_reclassification,
     start_run,
 )
@@ -261,24 +262,43 @@ def test_get_missing_classification_job_returns_none():
     assert get_classification_job("missing") is None
 
 
-def test_mark_job_processing_claims_pending_job():
+def test_claim_next_job_claims_pending_job():
     create_ticket("t-1", "Double charge", "Charged twice")
 
-    assert mark_job_processing("t-1") is True
+    assert claim_next_job() == "t-1"
     assert get_classification_job("t-1")["status"] == "processing"
 
 
+def test_claim_next_job_returns_none_when_nothing_is_pending():
+    assert claim_next_job() is None
+
+
 @pytest.mark.parametrize("status", ["processing", "classified", "failed"])
-def test_mark_job_processing_ignores_job_that_is_not_pending(status):
+def test_claim_next_job_skips_job_that_is_not_pending(status):
     create_ticket("t-1", "Double charge", "Charged twice")
     set_job_status("t-1", status)
 
-    assert mark_job_processing("t-1") is False
+    assert claim_next_job() is None
     assert get_classification_job("t-1")["status"] == status
 
 
-def test_mark_missing_job_processing_returns_false():
-    assert mark_job_processing("missing") is False
+def test_claim_next_job_takes_longest_waiting_job_first():
+    for ticket_id in ("t-1", "t-2", "t-3"):
+        create_ticket(ticket_id, "Subject", "Body")
+
+    assert [claim_next_job() for _ in range(4)] == ["t-1", "t-2", "t-3", None]
+
+
+def test_concurrent_claims_never_return_the_same_job():
+    ticket_ids = [f"t-{number}" for number in range(30)]
+    for ticket_id in ticket_ids:
+        create_ticket(ticket_id, "Subject", "Body")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        claimed = list(pool.map(lambda _: claim_next_job(), range(40)))
+
+    assert sorted(c for c in claimed if c is not None) == sorted(ticket_ids)
+    assert claimed.count(None) == 10
 
 
 def get_run(run_id: int) -> dict:
@@ -464,29 +484,32 @@ def test_complete_classification_rolls_back_when_ticket_update_fails():
     assert get_run(run_id)["status"] == "running"
 
 
-def test_recover_unfinished_jobs_returns_pending_job():
+def test_recover_interrupted_jobs_leaves_pending_job_pending():
     create_ticket("t-1", "Double charge", "Charged twice")
 
-    assert recover_unfinished_jobs() == ["t-1"]
+    recover_interrupted_jobs()
+
     assert get_classification_job("t-1")["status"] == "pending"
 
 
-def test_recover_unfinished_jobs_resets_interrupted_processing_job(processing_job):
+def test_recover_interrupted_jobs_resets_interrupted_processing_job(processing_job):
     record_failed_attempt("t-1", start_run("t-1"), "LLM call failed: TimeoutError")
 
-    assert recover_unfinished_jobs() == ["t-1"]
+    recover_interrupted_jobs()
+
     job = get_classification_job("t-1")
     assert job["status"] == "pending"
     assert job["attempts"] == 1
     assert job["updated_at"] != OLD_TIMESTAMP
+    assert claim_next_job() == "t-1"
 
 
-def test_recover_unfinished_jobs_fails_interrupted_runs_only(processing_job):
+def test_recover_interrupted_jobs_fails_interrupted_runs_only(processing_job):
     finished = start_run("t-1")
     record_failed_attempt("t-1", finished, "timeout")
     interrupted = start_run("t-1")
 
-    recover_unfinished_jobs()
+    recover_interrupted_jobs()
 
     assert get_run(interrupted)["status"] == "failed"
     assert get_run(interrupted)["error"] == RUN_INTERRUPTED
@@ -509,22 +532,13 @@ def test_schema_rejects_running_run_with_finish_time():
 
 
 @pytest.mark.parametrize("status", ["classified", "failed"])
-def test_recover_unfinished_jobs_skips_finished_job(status):
+def test_recover_interrupted_jobs_leaves_finished_job_alone(status):
     create_ticket("t-1", "Double charge", "Charged twice")
     set_job_status("t-1", status)
 
-    assert recover_unfinished_jobs() == []
+    recover_interrupted_jobs()
+
     assert get_classification_job("t-1")["status"] == status
-
-
-def test_recover_unfinished_jobs_returns_only_unfinished_jobs_oldest_first():
-    for ticket_id in ("t-1", "t-2", "t-3", "t-4"):
-        create_ticket(ticket_id, "Subject", "Body")
-    set_job_status("t-1", "classified")
-    set_job_status("t-2", "processing")
-    set_job_status("t-3", "failed")
-
-    assert recover_unfinished_jobs() == ["t-2", "t-4"]
 
 
 def finished_job(status: str) -> None:
@@ -580,13 +594,13 @@ def test_reset_for_reclassification_of_missing_ticket_returns_false():
 
 def test_reclassified_job_numbers_its_runs_after_earlier_ones():
     create_ticket("t-1", "Double charge", "Charged twice")
-    mark_job_processing("t-1")
+    claim_next_job()
     run_id = start_run("t-1")
     record_failed_attempt("t-1", run_id, "LLM call failed: TimeoutError")
     mark_job_failed("t-1")
 
     reset_for_reclassification("t-1")
-    mark_job_processing("t-1")
+    claim_next_job()
     start_run("t-1")
 
     with get_connection() as connection:

@@ -5,10 +5,15 @@ from pathlib import Path
 import pytest
 
 from app import constants
-from app.classification.service import classify_ticket
+from app.classification.service import classify_claimed_ticket
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
-from app.db.tickets import create_ticket, get_classification_job, get_ticket
+from app.db.tickets import (
+    claim_next_job,
+    create_ticket,
+    get_classification_job,
+    get_ticket,
+)
 from app.llm.fake import (
     EMPTY_SUMMARY_RESPONSE,
     INVALID_CATEGORY_RESPONSE,
@@ -24,6 +29,18 @@ from app.llm.prompts import TICKET_END, TICKET_START
 @pytest.fixture(autouse=True)
 def initialized_database(database_path: Path) -> None:
     initialize_database()
+
+
+async def classify_ticket(ticket_id: str, llm) -> bool:
+    """Claim the next job as a worker would, then classify it.
+
+    Returns False without calling the model when nothing is pending.
+    """
+    claimed = await asyncio.to_thread(claim_next_job)
+    if claimed is None:
+        return False
+    assert claimed == ticket_id
+    return await classify_claimed_ticket(claimed, llm)
 
 
 def stored_values() -> list[object]:
@@ -263,6 +280,18 @@ def test_does_not_persist_raw_model_output():
     assert get_classification_job("t-1")["status"] == "classified"
     assert raw_output not in stored_values()
     assert raw_output.strip() not in stored_values()
+
+
+def test_claimed_job_without_its_ticket_fails_without_calling_llm():
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    with get_connection() as connection:
+        connection.execute("DELETE FROM tickets WHERE id = ?", ("t-1",))
+    llm = FakeLLMClient([VALID_RESPONSE])
+
+    assert asyncio.run(classify_ticket("t-1", llm)) is False
+
+    assert llm.prompts == []
+    assert get_classification_job("t-1")["status"] == "failed"
 
 
 def test_missing_ticket_is_not_classified():

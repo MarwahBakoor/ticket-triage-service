@@ -2,10 +2,11 @@ import asyncio
 
 import pytest
 
-from app.classification.service import classify_ticket
+from app.classification.service import classify_claimed_ticket
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
 from app.db.tickets import (
+    claim_next_job,
     create_ticket,
     get_classification_job,
     reset_for_reclassification,
@@ -69,7 +70,8 @@ def test_database_with_removed_last_error_column_still_works():
     create_ticket("t-1", "Double charge", "I was charged twice")
     llm = FakeLLMClient([MALFORMED_JSON_RESPONSE, VALID_RESPONSE])
 
-    assert asyncio.run(classify_ticket("t-1", llm)) is True
+    assert claim_next_job() == "t-1"
+    assert asyncio.run(classify_claimed_ticket("t-1", llm)) is True
 
     assert get_classification_job("t-1")["status"] == "classified"
     assert reset_for_reclassification("t-1") is True

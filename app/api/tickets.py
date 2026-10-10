@@ -1,7 +1,7 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from app.api.schemas import TicketCreate, TicketOrder, TicketResponse
 from app.db.tickets import (
@@ -34,19 +34,14 @@ NOT_FOUND_RESPONSE = {
     ),
     response_description="The stored ticket.",
 )
-async def submit_ticket(ticket: TicketCreate, request: Request) -> TicketResponse:
-    """Accept a ticket for classification; duplicate ids return the stored ticket.
+async def submit_ticket(ticket: TicketCreate) -> TicketResponse:
+    """Store a ticket as pending; duplicate ids return the stored ticket.
 
-    Classification runs later on a worker. Only newly created tickets are
-    enqueued, and only after their transaction has committed.
+    Nothing else is needed: workers poll the database for pending tickets.
     """
-    stored, created = await asyncio.to_thread(
+    stored, _ = await asyncio.to_thread(
         create_ticket, ticket.id, ticket.subject, ticket.body
     )
-    # Enqueue on the event loop thread: asyncio.Queue is not thread-safe.
-    workers = getattr(request.app.state, "classification_workers", None)
-    if created and workers is not None:
-        workers.enqueue(ticket.id)
     return TicketResponse.model_validate(stored)
 
 
@@ -121,7 +116,6 @@ async def reclassify_ticket(
     ticket_id: Annotated[
         str, Path(description="The id the ticket was submitted with.")
     ],
-    request: Request,
 ) -> TicketResponse:
     if not await asyncio.to_thread(reset_for_reclassification, ticket_id):
         if await asyncio.to_thread(get_ticket, ticket_id) is None:
@@ -129,10 +123,7 @@ async def reclassify_ticket(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Ticket is still being classified"
         )
-    # Only the request that reset the job enqueues it, on the event loop thread.
-    workers = getattr(request.app.state, "classification_workers", None)
-    if workers is not None:
-        workers.enqueue(ticket_id)
+    # The job is pending again, so a worker will claim it on its next poll.
     stored = await asyncio.to_thread(get_ticket, ticket_id)
     if stored is None:
         raise RuntimeError(f"ticket {ticket_id!r} disappeared after reset")

@@ -33,6 +33,13 @@ def initialize_database() -> None:
             )
             """
         )
+        # Workers poll for the pending job that has waited longest.
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS classification_jobs_by_status
+            ON classification_jobs (status, updated_at)
+            """
+        )
         # One row per classification attempt. A run is running until it
         # finishes, and only finished runs have finished_at.
         connection.execute(

@@ -74,8 +74,8 @@ create empty modules or directories merely to match this tree.
   holds test doubles only and must not be imported by application code.
 - `app/classification/`: classification workflow, retries, and coordination
   between the LLM and database.
-- `app/workers/`: asynchronous queue, worker lifecycle, concurrency, and startup
-  recovery.
+- `app/workers/`: workers that poll the database for pending tickets, their
+  lifecycle, and concurrency.
 - `app/main.py`: application creation and lifecycle wiring, including serving
   the dashboard.
 - `app/constants.py`: tunable values (attempts, timeout, retry delay, worker

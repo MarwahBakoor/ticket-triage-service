@@ -99,7 +99,8 @@ POST /tickets ──► pending ──► processing ──► classified
 | `classified` | `category`, `priority` and `summary` are set. |
 | `failed` | No valid classification after 3 attempts. The classification fields stay null. |
 
-- Classification usually finishes within moments. Poll `GET /tickets/{id}`
+- A worker picks up a new ticket within about a second, and classification
+  usually finishes shortly after. Poll `GET /tickets/{id}`
   every second or two until the status is `classified` or `failed`. The
   dashboard polls every 1.5 s while anything is in progress.
 - An attempt fails if the model call errors, takes longer than 30 seconds,
@@ -108,8 +109,8 @@ POST /tickets ──► pending ──► processing ──► classified
 - `classified` and `failed` stay put unless you
   [reclassify](#reclassify-a-ticket) the ticket.
 - If the service restarts mid-classification, the ticket goes back to
-  `pending` and is picked up again on startup. Attempts already used still
-  count towards the limit.
+  `pending` when it starts again and is classified then. Attempts already
+  used still count towards the limit.
 
 ## Endpoints
 

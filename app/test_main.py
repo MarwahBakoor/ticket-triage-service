@@ -8,6 +8,7 @@ from app.db.schema import initialize_database
 from app.db.tickets import create_ticket, get_classification_job, get_ticket
 from app.llm.fake import VALID_RESPONSE, FakeLLMClient
 from app.main import app
+from tests.conftest import wait_until_idle
 
 
 def test_health() -> None:
@@ -55,7 +56,7 @@ def test_dashboard_files_are_served(path: str, content_type: str) -> None:
     assert content_type in response.headers["content-type"]
 
 
-def test_startup_reclassifies_pending_and_interrupted_jobs(
+def test_startup_classifies_pending_and_interrupted_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     initialize_database()
@@ -73,7 +74,7 @@ def test_startup_reclassifies_pending_and_interrupted_jobs(
 
     async def scenario() -> None:
         async with app.router.lifespan_context(app):
-            await asyncio.wait_for(app.state.classification_workers.join(), 5)
+            await wait_until_idle()
 
     asyncio.run(scenario())
 

@@ -15,6 +15,9 @@ RETRY_BASE_DELAY_SECONDS = 1.0
 
 # Classifications that may run at once when CLASSIFICATION_WORKERS is unset.
 DEFAULT_WORKER_COUNT = 4
+# How long an idle worker waits before asking the database for work again. A
+# new ticket is picked up within this time.
+POLL_INTERVAL_SECONDS = 1.0
 
 # Room for one long sentence. "One sentence" itself is asked for in the prompt
 # but not parsed: abbreviations like "e.g." would turn good answers into

@@ -7,9 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.llm.fake import MALFORMED_JSON_RESPONSE, VALID_RESPONSE, FakeLLMClient
 from app.main import app
-
-# Guards against a hung test; never part of the asserted behavior.
-TIMEOUT_SECONDS = 5
+from tests.conftest import wait_until_idle
 
 
 @pytest.fixture
@@ -40,9 +38,7 @@ def classify_tickets(
                     "/tickets",
                     json={"id": ticket_id, "subject": "Charged twice", "body": "Help"},
                 )
-            await asyncio.wait_for(
-                app.state.classification_workers.join(), TIMEOUT_SECONDS
-            )
+            await wait_until_idle()
 
     asyncio.run(scenario())
 

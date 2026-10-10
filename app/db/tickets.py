@@ -133,19 +133,31 @@ def get_classification_job(ticket_id: str) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
-def mark_job_processing(ticket_id: str) -> bool:
-    """Claim a pending job. Returns False if the job is missing or not pending."""
+def claim_next_job() -> str | None:
+    """Claim the pending job that has waited longest and return its ticket id.
+
+    Returns None when nothing is pending. Finding and claiming happen in one
+    UPDATE, which SQLite runs under its write lock, so concurrent workers
+    never claim the same job. Waiting time counts from the job's last change,
+    so a reclassified or recovered ticket joins the back of the line.
+    """
     now = datetime.now(UTC).isoformat()
     with get_connection() as connection:
-        cursor = connection.execute(
+        row = connection.execute(
             """
             UPDATE classification_jobs
             SET status = 'processing', updated_at = ?
-            WHERE ticket_id = ? AND status = 'pending'
+            WHERE ticket_id = (
+                SELECT ticket_id FROM classification_jobs
+                WHERE status = 'pending'
+                ORDER BY updated_at, ticket_id
+                LIMIT 1
+            )
+            RETURNING ticket_id
             """,
-            (now, ticket_id),
-        )
-    return cursor.rowcount == 1
+            (now,),
+        ).fetchone()
+    return row["ticket_id"] if row is not None else None
 
 
 def start_run(ticket_id: str) -> int | None:
@@ -303,14 +315,13 @@ def reset_for_reclassification(ticket_id: str) -> bool:
     return True
 
 
-def recover_unfinished_jobs() -> list[str]:
-    """Reset interrupted jobs to pending and return every pending ticket id.
+def recover_interrupted_jobs() -> None:
+    """Return interrupted jobs to pending so workers claim them again.
 
     Call only at startup, before any worker runs: a job still marked
     processing then belongs to a process that stopped mid-attempt. Its
     attempt count is kept, so the interrupted attempt is simply retried.
-    Its unfinished run is recorded as failed. Completed and failed jobs are
-    never returned.
+    Its unfinished run is recorded as failed.
     """
     now = datetime.now(UTC).isoformat()
     with get_connection() as connection:
@@ -330,11 +341,3 @@ def recover_unfinished_jobs() -> list[str]:
             """,
             (now,),
         )
-        rows = connection.execute(
-            """
-            SELECT ticket_id FROM classification_jobs
-            WHERE status = 'pending'
-            ORDER BY created_at, ticket_id
-            """
-        ).fetchall()
-    return [row["ticket_id"] for row in rows]

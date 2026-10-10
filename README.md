@@ -60,8 +60,8 @@ Every endpoint, status code and error is described in
 
 - **`pending`**: stored and waiting for a worker.
 - **`processing`**: a worker has claimed the ticket and is classifying it.
-  Claiming is a single `UPDATE … WHERE status = 'pending'`, so only one worker
-  can win and a ticket is never classified twice at once.
+  Finding and claiming the next ticket is a single `UPDATE … RETURNING`, so
+  two workers can never claim the same ticket.
 - **`classified`**: a validated category, priority and summary are stored.
 - **`failed`**: no valid classification after 3 attempts. The classification
   fields stay null, and each failed attempt's error is recorded as fixed text.
@@ -80,12 +80,17 @@ SQLite needs no setup, and its transactions keep the important steps atomic.
 
 ### Background classification
 
-`POST /tickets` only writes to the database. After the commit, the ticket id
-goes onto an in-process `asyncio.Queue` that worker tasks consume, so
-classification never runs inside the request. The database is the source of
-truth and the queue is only a cache of work to do, so losing the queue loses
-nothing. This needs no broker or extra process, at the cost of allowing only
-one service process per database.
+`POST /tickets` only saves the ticket as `pending`, so classification never
+runs inside the request. The database is the queue: workers poll it, claim
+the ticket that has waited longest, and classify it. When nothing is pending,
+a worker sleeps for a second before asking again, so a new ticket is picked up
+within about a second.
+
+Because every saved ticket is in the database, none can be missed: there is no
+separate queue to fall out of step with it. This needs no broker or extra
+process. The cost is that idle workers query the database once a second, and
+only one service process may use a database, because startup recovery
+assumes no other process is working on jobs.
 
 ### Concurrency
 
@@ -98,9 +103,8 @@ Database calls run in a thread so they never block the event loop.
 
 On startup, before any worker runs:
 
-- jobs left in `processing` go back to `pending`;
-- their unfinished runs are recorded as failed;
-- every `pending` job is queued again, oldest first.
+- jobs left in `processing` go back to `pending`, where workers find them;
+- their unfinished runs are recorded as failed.
 
 The attempt count is kept, so a ticket can't escape the retry limit by
 crashing the service; the interrupted attempt itself is not counted. On
@@ -125,7 +129,7 @@ Retries wait 1 s, then 2 s. After the third failure the ticket is `failed`.
 set of attempts, for example after an outage or a prompt change. It also
 appears as a button in the dashboard's ticket view. It clears the old result
 in the same transaction, so a ticket never shows a stale answer. A ticket that
-is still in progress returns `409`, so a ticket can't be queued twice.
+is still in progress returns `409`, so repeating the request changes nothing.
 
 ### Model output validation
 
@@ -189,7 +193,7 @@ app/
 ├── llm/                Client interface, keyword stand-in model, prompt,
 │                       output validation; fake.py holds test doubles
 ├── classification/     One ticket's classification, with retries
-└── workers/            Queue and worker pool
+└── workers/            Worker pool that polls for pending tickets
 frontend/               Dashboard (plain HTML/CSS/JS, no build step)
 sample_data/            Ten sample tickets
 scripts/load_samples.py Loads them into a running service

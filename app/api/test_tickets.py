@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.connection import get_connection
-from app.db.schema import initialize_database
 from app.db.tickets import get_ticket
 from app.llm.fake import (
     MALFORMED_JSON_RESPONSE,
@@ -17,7 +16,7 @@ from app.llm.fake import (
     FakeLLMClient,
 )
 from app.main import app
-from app.workers.classification import ClassificationWorkers
+from tests.conftest import wait_until_idle
 
 SAMPLES_PATH = Path(__file__).parents[2] / "sample_data" / "tickets.json"
 
@@ -339,9 +338,7 @@ def test_classification_runs_after_the_create_request_returns(
 
             await asyncio.wait_for(llm.wait_for_in_flight(1), TIMEOUT_SECONDS)
             llm.release.set()
-            await asyncio.wait_for(
-                app.state.classification_workers.join(), TIMEOUT_SECONDS
-            )
+            await wait_until_idle()
 
             classified = await client.get("/tickets/t-1")
             assert classified.json()["classification_status"] == "classified"
@@ -362,9 +359,7 @@ def test_failed_classification_is_visible_with_no_result(
     async def scenario() -> httpx.Response:
         async with app.router.lifespan_context(app), async_client() as client:
             await post_ticket(client)
-            await asyncio.wait_for(
-                app.state.classification_workers.join(), TIMEOUT_SECONDS
-            )
+            await wait_until_idle()
             return await client.get("/tickets/t-1")
 
     body = asyncio.run(scenario()).json()
@@ -374,50 +369,42 @@ def test_failed_classification_is_visible_with_no_result(
     assert body["summary"] is None
 
 
-@pytest.fixture
-def idle_workers(monkeypatch: pytest.MonkeyPatch) -> ClassificationWorkers:
-    """Workers that are never started, so enqueued ids stay observable."""
-    initialize_database()
-    workers = ClassificationWorkers(FakeLLMClient([]), 1)
-    monkeypatch.setattr(app.state, "classification_workers", workers, raising=False)
-    return workers
-
-
-def test_new_ticket_is_enqueued_once(idle_workers: ClassificationWorkers) -> None:
-    async def scenario() -> None:
-        async with async_client() as client:
-            await post_ticket(client)
-
-    asyncio.run(scenario())
-
-    assert idle_workers.queued_count() == 1
-
-
-def test_duplicate_ticket_is_not_enqueued_again(
-    idle_workers: ClassificationWorkers,
+def test_duplicate_ticket_is_not_classified_again(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    llm = FakeLLMClient([VALID_RESPONSE])
+    monkeypatch.setattr(app.state, "llm_client", llm, raising=False)
+
     async def scenario() -> None:
-        async with async_client() as client:
+        async with app.router.lifespan_context(app), async_client() as client:
             await post_ticket(client)
+            await wait_until_idle()
             await post_ticket(client)
+            await wait_until_idle()
 
     asyncio.run(scenario())
 
-    assert idle_workers.queued_count() == 1
+    assert len(llm.prompts) == 1
     assert count_rows("classification_jobs") == 1
+    assert count_rows("classification_runs") == 1
 
 
-def test_concurrent_duplicate_tickets_are_enqueued_once(
-    idle_workers: ClassificationWorkers,
+def test_concurrent_duplicate_tickets_are_classified_once(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    llm = FakeLLMClient([VALID_RESPONSE])
+    monkeypatch.setattr(app.state, "llm_client", llm, raising=False)
+
     async def scenario() -> list[httpx.Response]:
-        async with async_client() as client:
-            return await asyncio.gather(*(post_ticket(client) for _ in range(5)))
+        async with app.router.lifespan_context(app), async_client() as client:
+            responses = await asyncio.gather(*(post_ticket(client) for _ in range(5)))
+            await wait_until_idle()
+            return responses
 
     responses = asyncio.run(scenario())
 
     assert all(response.status_code == 202 for response in responses)
-    assert idle_workers.queued_count() == 1
+    assert len(llm.prompts) == 1
     assert count_rows("tickets") == 1
     assert count_rows("classification_jobs") == 1
 
@@ -445,20 +432,23 @@ def test_reclassify_returns_finished_ticket_to_pending(
     assert body["category"] is None
 
 
-def test_reclassify_enqueues_ticket_once(idle_workers: ClassificationWorkers) -> None:
+def test_concurrent_reclassify_requests_reset_the_ticket_once(
+    client: TestClient,
+) -> None:
+    # No workers run here, so the reset ticket stays pending for the others.
+    client.post("/tickets", json=TICKET)
+    set_job_status("t-1", "failed")
+
     async def scenario() -> list[httpx.Response]:
-        async with async_client() as client:
-            await post_ticket(client)
-            set_job_status("t-1", "failed")
+        async with async_client() as http:
             return await asyncio.gather(
-                *(client.post("/tickets/t-1/reclassify") for _ in range(3))
+                *(http.post("/tickets/t-1/reclassify") for _ in range(3))
             )
 
     responses = asyncio.run(scenario())
 
     assert sorted(response.status_code for response in responses) == [202, 409, 409]
-    # One id from the submission, one from the reclassification.
-    assert idle_workers.queued_count() == 2
+    assert get_ticket("t-1")["classification_status"] == "pending"
 
 
 @pytest.mark.parametrize("status", ["pending", "processing"])
@@ -490,11 +480,10 @@ def test_failed_ticket_is_classified_after_reclassify(
 
     async def scenario() -> httpx.Response:
         async with app.router.lifespan_context(app), async_client() as client:
-            workers = app.state.classification_workers
             await post_ticket(client)
-            await asyncio.wait_for(workers.join(), TIMEOUT_SECONDS)
+            await wait_until_idle()
             await client.post("/tickets/t-1/reclassify")
-            await asyncio.wait_for(workers.join(), TIMEOUT_SECONDS)
+            await wait_until_idle()
             return await client.get("/tickets/t-1")
 
     body = asyncio.run(scenario()).json()

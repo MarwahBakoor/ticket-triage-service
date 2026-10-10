@@ -6,7 +6,6 @@ from app.db.tickets import (
     get_classification_job,
     get_ticket,
     mark_job_failed,
-    mark_job_processing,
     record_failed_attempt,
     start_run,
 )
@@ -20,14 +19,18 @@ def retry_delay(failed_attempts: int) -> float:
     return constants.RETRY_BASE_DELAY_SECONDS * 2 ** (failed_attempts - 1)
 
 
-async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
-    """Classify a pending ticket, retrying failed attempts up to MAX_ATTEMPTS.
+async def classify_claimed_ticket(ticket_id: str, llm: LLMClient) -> bool:
+    """Classify a ticket whose job the caller has claimed, with retries.
 
-    Returns True only if the ticket was classified. Database calls run in a
-    thread so a locked database never blocks the event loop.
+    Retries failed attempts up to MAX_ATTEMPTS. Returns True only if the
+    ticket was classified. Database calls run in a thread so a locked
+    database never blocks the event loop.
     """
     ticket = await asyncio.to_thread(get_ticket, ticket_id)
-    if ticket is None or not await asyncio.to_thread(mark_job_processing, ticket_id):
+    if ticket is None:
+        # Only a damaged database has a job without its ticket. Fail the job
+        # rather than leave it processing.
+        await asyncio.to_thread(mark_job_failed, ticket_id)
         return False
 
     prompt = build_classification_prompt(ticket["subject"], ticket["body"])

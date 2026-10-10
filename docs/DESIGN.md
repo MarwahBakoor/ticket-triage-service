@@ -34,26 +34,45 @@ relationship is enforced in application code.
 
 ## Async execution
 
-`POST /tickets` stores the ticket and its `pending` job in one transaction. Only
-when the ticket is new, and after that commit, is its id put on an in-process
-`asyncio.Queue`. Classification never runs inside the request.
+`POST /tickets` stores the ticket and its `pending` job in one transaction and
+returns. Classification never runs inside the request.
 
-The FastAPI lifespan starts `CLASSIFICATION_WORKERS` worker tasks. Each handles
-one ticket at a time, so no more than that many classifications run at once.
-Each database operation opens and closes its own short-lived connection.
+The `classification_jobs` table is the queue. The FastAPI lifespan starts
+`CLASSIFICATION_WORKERS` worker tasks that poll it. Each worker:
+
+1. claims the pending job that has waited longest (`claim_next_job`);
+2. classifies that ticket, with retries;
+3. asks again. When nothing is pending, it sleeps for `POLL_INTERVAL_SECONDS`
+   (1 s) first.
+
+Claiming is one statement, an `UPDATE … WHERE ticket_id = (SELECT … LIMIT 1)
+RETURNING ticket_id`. SQLite takes its write lock before a write statement
+reads anything, so concurrent workers never claim the same job. Waiting time
+counts from the job's `updated_at`, so a recovered or reclassified ticket joins
+the back of the line. An index on `(status, updated_at)` keeps the lookup
+cheap.
+
+Polling is preferred over an in-process `asyncio.Queue` fed by the request.
+With such a queue, saving a ticket and queuing it are two steps, and a ticket
+saved but not queued waits for the next startup. With polling the database is
+the only record of work, so a saved ticket is always found. The cost is up to
+one poll interval of latency and a small query per idle worker per second.
+
+Each worker handles one ticket at a time, so no more than `CLASSIFICATION_WORKERS`
+classifications run at once. Each database operation opens and closes its own
+short-lived connection.
 
 ## Restart behavior
 
-SQLite is the durable source of truth; the queue is only a cache of work to do.
-On startup, before workers run:
+On startup, before workers run (`recover_interrupted_jobs`):
 
-- jobs still `processing` are reset to `pending`. With an in-process queue, a
+- jobs still `processing` are reset to `pending`, where workers find them. A
   job in that state at startup was owned by a process that stopped
   mid-attempt. Its attempt count is kept, so the retry limit still applies.
 - runs still `running` are marked `failed` with the error
   `Interrupted before finishing`. They don't use up an attempt.
-- every `pending` job is enqueued, oldest first.
-- `classified` and `failed` jobs are never enqueued.
+
+Pending jobs need nothing: workers find them by polling.
 
 On shutdown, workers are cancelled. Interrupted jobs stay `processing` and are
 recovered on the next start.
@@ -89,10 +108,10 @@ output is never stored.
 
 `POST /tickets/{id}/reclassify` resets a `classified` or `failed` job to
 `pending` with 0 attempts and clears the ticket's classification, in one
-transaction, then queues the ticket. Clearing keeps the rule that a ticket only
+transaction; a worker then claims it on its next poll. Clearing keeps the rule that a ticket only
 shows a result from its current job; a failed reclassification never leaves a
 stale answer looking current. The reset only matches finished jobs, so a
-repeated or concurrent request gets `409` and the ticket is queued once. Run
+repeated or concurrent request gets `409` and changes nothing. Run
 history is kept, and new runs continue the ticket's numbering. The dashboard's
 ticket popup offers a Reclassify button for classified and failed tickets.
 
@@ -111,12 +130,15 @@ allowed answer. Sample `t-1005` is a regression test covering both cases.
 
 - **SQLite**: zero setup and transactional, but one writer at a time and
   local to one machine.
-- **In-process queue**: simple and dependency-free, but tied to one process.
-  Running several service processes against one database is unsafe, because
-  startup recovery would reset jobs another process is working on.
+- **Database polling**: no broker and no work can be missed, but a new ticket
+  waits up to one poll interval, and idle workers query once a second.
+- **One process per database**: the atomic claim would let several processes
+  share the work, but startup recovery resets every `processing` job, including
+  ones another live process is working on. Postgres with lease timeouts and
+  `FOR UPDATE SKIP LOCKED` would remove that limit.
 - **No durable external job system**: durability comes from the
-  `classification_jobs` table, not the queue. A crash loses only in-flight
-  attempts, which are retried on restart.
+  `classification_jobs` table. A crash loses only in-flight attempts, which
+  are retried on restart.
 - **No migrations**: `CREATE TABLE IF NOT EXISTS` only. Schema changes on an
   existing database need manual handling.
 - **Stand-in LLM**: the keyword client (`app/llm/keyword.py`) is plausible,
