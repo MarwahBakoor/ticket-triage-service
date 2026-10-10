@@ -30,6 +30,11 @@ app/
     ├── classification.py
     └── test_classification.py
 
+frontend/
+├── index.html
+├── styles.css
+└── app.js
+
 sample_data/
 └── tickets.json
 
@@ -57,7 +62,11 @@ create empty modules or directories merely to match this tree.
   between the LLM and database.
 - `app/workers/`: asynchronous queue, worker lifecycle, concurrency, and startup
   recovery.
-- `app/main.py`: application creation and lifecycle wiring.
+- `app/main.py`: application creation and lifecycle wiring, including serving
+  the dashboard.
+- `frontend/`: the static dashboard (plain HTML, CSS and JavaScript, no build
+  step). It talks to the API only over HTTP and inserts ticket text as text,
+  never as HTML.
 
 # Database design
 

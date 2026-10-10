@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ticket Triage</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236d5efc'/%3E%3Cstop offset='1' stop-color='%2322c1ee'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M9 11h14M9 16h9M9 21h5' stroke='white' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script>
+      // Apply a saved theme before first paint to avoid a flash.
+      try {
+        const theme = localStorage.getItem("theme");
+        if (theme) document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <div class="backdrop-glow" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Ticket Triage home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M5 8h14M5 12h9M5 16h5" /></svg>
+        </span>
+        <span class="brand-name">Triage</span>
+      </a>
+
+      <nav class="tabs" aria-label="Views">
+        <a class="tab" href="./" data-view="tickets">Tickets</a>
+        <a class="tab" href="./?view=metrics" data-view="metrics">Metrics</a>
+      </nav>
+
+      <div class="live" id="live" data-state="connecting" role="status">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span id="live-text">Connecting…</span>
+      </div>
+
+      <div class="topbar-actions">
+        <button
+          class="icon-btn"
+          id="refresh"
+          type="button"
+          aria-label="Refresh now"
+          title="Refresh (R)"
+        ></button>
+        <button
+          class="icon-btn"
+          id="theme-toggle"
+          type="button"
+          aria-label="Switch colour theme"
+          title="Switch theme"
+        ></button>
+        <button class="btn btn-primary" id="new-ticket" type="button">
+          <span class="btn-label">New ticket</span>
+          <kbd>N</kbd>
+        </button>
+      </div>
+    </header>
+
+    <div class="banner" id="offline" role="alert" hidden>
+      <span id="offline-text">Can't reach the API.</span>
+      <button class="btn btn-ghost btn-sm" id="retry" type="button">Retry now</button>
+    </div>
+
+    <main class="layout">
+      <section class="view board" id="view-tickets" aria-labelledby="board-title">
+        <header class="board-head">
+          <div>
+            <h1 id="board-title">Tickets</h1>
+            <p class="board-sub" id="board-sub">&nbsp;</p>
+          </div>
+          <div class="board-actions">
+            <button class="btn btn-ghost btn-sm" id="clear-filters" type="button" hidden>
+              Clear filters
+            </button>
+            <div class="sort" role="group" aria-labelledby="sort-label">
+              <span class="sort-label" id="sort-label">Sort</span>
+              <div class="segmented" id="sort"></div>
+            </div>
+          </div>
+        </header>
+
+        <div class="toolbar">
+          <div class="chip-row" role="group" aria-label="Filter by category" id="category-filter"></div>
+          <div class="chip-row" role="group" aria-label="Filter by priority" id="priority-filter"></div>
+        </div>
+
+        <ol class="ticket-list" id="ticket-list" aria-label="Tickets"></ol>
+
+        <nav class="pager" id="pager" aria-label="Pagination">
+          <span class="pager-range" id="pager-range"></span>
+          <div class="pager-buttons">
+            <button class="btn btn-ghost btn-sm" id="prev-page" type="button">Previous</button>
+            <button class="btn btn-ghost btn-sm" id="next-page" type="button">Next</button>
+          </div>
+        </nav>
+
+        <p class="shortcuts" aria-hidden="true">
+          <kbd>T</kbd> tickets <kbd>M</kbd> metrics <kbd>N</kbd> new ticket <kbd>R</kbd> refresh <kbd>S</kbd> change sort <kbd>J</kbd><kbd>K</kbd> next / previous
+          in a ticket <kbd>Esc</kbd> close
+        </p>
+      </section>
+
+      <section class="view overview" id="view-metrics" aria-labelledby="metrics-title" hidden>
+        <header class="view-head">
+          <h1 id="metrics-title">Metrics</h1>
+          <p class="board-sub">Health of the classification pipeline, updated live.</p>
+        </header>
+        <div class="stats">
+          <article class="stat" data-tone="neutral">
+            <div class="stat-head"><span class="stat-icon" data-icon="inbox"></span>Total</div>
+            <div class="stat-value" id="stat-total">0</div>
+            <div class="stat-sub" id="stat-total-sub">&nbsp;</div>
+          </article>
+          <article class="stat" data-tone="queue">
+            <div class="stat-head"><span class="stat-icon" data-icon="clock"></span>In queue</div>
+            <div class="stat-value" id="stat-queue">0</div>
+            <div class="stat-sub" id="stat-queue-sub">&nbsp;</div>
+          </article>
+          <article class="stat" data-tone="done">
+            <div class="stat-head"><span class="stat-icon" data-icon="check"></span>Classified</div>
+            <div class="stat-value" id="stat-done">0</div>
+            <div class="stat-sub" id="stat-done-sub">&nbsp;</div>
+            <div class="meter" aria-hidden="true"><span id="stat-done-meter"></span></div>
+          </article>
+          <article class="stat" data-tone="failed">
+            <div class="stat-head"><span class="stat-icon" data-icon="alert"></span>Failed</div>
+            <div class="stat-value" id="stat-failed">0</div>
+            <div class="stat-sub" id="stat-failed-sub">&nbsp;</div>
+          </article>
+        </div>
+
+        <div class="distributions">
+          <article class="dist">
+            <header class="dist-head">
+              <h2>Categories</h2>
+              <span class="dist-note">Click to see tickets</span>
+            </header>
+            <div class="dist-bar" id="category-bar"></div>
+            <ul class="legend" id="category-legend"></ul>
+          </article>
+          <article class="dist">
+            <header class="dist-head">
+              <h2>Priority</h2>
+              <span class="dist-note">Click to see tickets</span>
+            </header>
+            <div class="dist-bar" id="priority-bar"></div>
+            <ul class="legend" id="priority-legend"></ul>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="drawer" id="drawer" aria-labelledby="drawer-title">
+      <div class="drawer-panel">
+        <header class="drawer-head">
+          <div class="drawer-id">
+            <span class="mono" id="drawer-id"></span>
+            <button class="icon-btn icon-btn-sm" id="copy-id" type="button" aria-label="Copy ticket id" title="Copy id"></button>
+          </div>
+          <button class="icon-btn" id="close-drawer" type="button" aria-label="Close ticket"></button>
+        </header>
+        <div class="drawer-body" id="drawer-body"></div>
+      </div>
+    </dialog>
+
+    <dialog class="composer" id="composer" aria-labelledby="composer-title">
+      <form class="composer-form" id="composer-form" novalidate>
+        <header class="composer-head">
+          <div>
+            <h2 id="composer-title">New ticket</h2>
+            <p>It's stored right away and classified in the background.</p>
+          </div>
+          <button class="icon-btn" id="close-composer" type="button" aria-label="Close"></button>
+        </header>
+
+        <div class="examples" role="group" aria-label="Fill in an example">
+          <span class="examples-label">Try an example</span>
+          <div class="chip-row" id="examples"></div>
+        </div>
+
+        <div class="field">
+          <label for="ticket-id">Ticket id</label>
+          <input class="mono" id="ticket-id" name="id" autocomplete="off" spellcheck="false" aria-describedby="ticket-id-hint" />
+          <p class="field-hint" id="ticket-id-hint">Ids are unique. Reusing one returns the stored ticket.</p>
+        </div>
+
+        <div class="field">
+          <label for="ticket-subject">Subject <span class="optional">optional</span></label>
+          <input id="ticket-subject" name="subject" autocomplete="off" />
+        </div>
+
+        <div class="field">
+          <label for="ticket-body">Message</label>
+          <textarea id="ticket-body" name="body" rows="6" aria-describedby="ticket-body-hint"></textarea>
+          <p class="field-hint" id="ticket-body-hint">
+            <span>What is the customer asking for?</span>
+            <span class="count" id="body-count">0</span>
+          </p>
+        </div>
+
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+
+        <footer class="composer-foot">
+          <span class="foot-hint"><kbd>⌘</kbd><kbd>↵</kbd> to submit</span>
+          <div class="foot-actions">
+            <button class="btn btn-ghost" id="cancel-composer" type="button">Cancel</button>
+            <button class="btn btn-primary" id="submit-ticket" type="submit">
+              <span class="btn-label">Submit for triage</span>
+            </button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+  </body>
+</html>
