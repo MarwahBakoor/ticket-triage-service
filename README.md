@@ -80,15 +80,16 @@ SQLite needs no setup, and its transactions keep the important steps atomic.
 
 ### Background classification
 
-`POST /tickets` saves the ticket as `pending`, so classification never
-runs inside the request.
-The database is the queue: workers poll it, claim the ticket that has waited longest, and classify it. When nothing is pending,
-a worker sleeps for a second before asking again, so a new ticket is picked up
+`POST /tickets` saves the ticket as `pending`, so classification never runs
+inside the request. The database is the queue: workers poll it, claim the
+ticket that has waited longest, and classify it. When nothing is pending, a
+worker sleeps for a second before asking again, so a new ticket is picked up
 within about a second.
 
 ### Concurrency
 
-A fixed pool of `CLASSIFICATION_WORKERS` tasks (4 by default) classifies tickets, each handling one ticket at a time.
+A fixed pool of `CLASSIFICATION_WORKERS` tasks (4 by default) classifies
+tickets, each handling one ticket at a time.
 
 ### Restarts
 
