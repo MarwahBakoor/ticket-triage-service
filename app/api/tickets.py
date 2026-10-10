@@ -1,11 +1,12 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 
 from app.api.schemas import (
     TicketCategory,
     TicketCreate,
+    TicketOrder,
     TicketPriority,
     TicketResponse,
 )
@@ -13,8 +14,29 @@ from app.db.tickets import create_ticket, get_ticket, list_tickets
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
+NOT_FOUND_RESPONSE = {
+    status.HTTP_404_NOT_FOUND: {
+        "description": "No ticket has this id.",
+        "content": {"application/json": {"example": {"detail": "Ticket not found"}}},
+    }
+}
 
-@router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=TicketResponse)
+
+@router.post(
+    "",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=TicketResponse,
+    summary="Submit a ticket",
+    description=(
+        "Store a ticket and queue it for classification. The response is "
+        "returned before classification runs, so it has "
+        "`classification_status: pending` and null classification fields.\n\n"
+        "Submitting is idempotent by `id`: if the id already exists, the stored "
+        "ticket is returned unchanged (also with `202`), the new subject and "
+        "body are ignored, and it is not classified again."
+    ),
+    response_description="The stored ticket.",
+)
 async def submit_ticket(ticket: TicketCreate, request: Request) -> TicketResponse:
     """Accept a ticket for classification; duplicate ids return the stored ticket.
 
@@ -31,19 +53,58 @@ async def submit_ticket(ticket: TicketCreate, request: Request) -> TicketRespons
     return TicketResponse.model_validate(stored)
 
 
-@router.get("", response_model=list[TicketResponse])
+@router.get(
+    "",
+    response_model=list[TicketResponse],
+    summary="List tickets",
+    description=(
+        "Return a page of tickets. `category` and `priority` filters match "
+        "classified tickets only, because a ticket has neither until it is "
+        "classified. Pagination is offset-based: request the next page with "
+        "`offset + limit` until fewer than `limit` tickets come back."
+    ),
+    response_description="A page of tickets, possibly empty.",
+)
 def read_tickets(
-    category: TicketCategory | None = None,
-    priority: TicketPriority | None = None,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    category: Annotated[
+        TicketCategory | None, Query(description="Only tickets in this category.")
+    ] = None,
+    priority: Annotated[
+        TicketPriority | None, Query(description="Only tickets with this priority.")
+    ] = None,
+    limit: Annotated[
+        int, Query(ge=1, le=100, description="Maximum number of tickets to return.")
+    ] = 20,
+    offset: Annotated[int, Query(ge=0, description="Number of tickets to skip.")] = 0,
+    order: Annotated[
+        TicketOrder,
+        Query(
+            description=(
+                "`oldest` and `newest` sort by submission time. `priority` sorts "
+                "high, medium, low, then unclassified, oldest first within each."
+            )
+        ),
+    ] = TicketOrder.OLDEST,
 ) -> list[TicketResponse]:
-    stored = list_tickets(category, priority, limit, offset)
+    stored = list_tickets(category, priority, limit, offset, order)
     return [TicketResponse.model_validate(ticket) for ticket in stored]
 
 
-@router.get("/{ticket_id}", response_model=TicketResponse)
-def read_ticket(ticket_id: str) -> TicketResponse:
+@router.get(
+    "/{ticket_id}",
+    response_model=TicketResponse,
+    summary="Get a ticket",
+    description=(
+        "Return one ticket with its current classification status. Poll this "
+        "after submitting to see the classification arrive."
+    ),
+    responses=NOT_FOUND_RESPONSE,
+)
+def read_ticket(
+    ticket_id: Annotated[
+        str, Path(description="The id the ticket was submitted with.")
+    ],
+) -> TicketResponse:
     stored = get_ticket(ticket_id)
     if stored is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ticket not found")

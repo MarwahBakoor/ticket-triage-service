@@ -69,13 +69,35 @@ def get_ticket(ticket_id: str) -> dict[str, Any] | None:
         return _fetch_ticket(connection, ticket_id)
 
 
+# Fixed clauses only: the requested order selects one, it never becomes SQL.
+# Every clause ends with tickets.id so pages are stable when timestamps tie.
+_ORDER_BY = {
+    "oldest": "tickets.created_at, tickets.id",
+    "newest": "tickets.created_at DESC, tickets.id DESC",
+    "priority": """
+        CASE tickets.priority
+            WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3
+        END,
+        tickets.created_at,
+        tickets.id
+    """,
+}
+
+
 def list_tickets(
     category: str | None = None,
     priority: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    order: str = "oldest",
 ) -> list[dict[str, Any]]:
-    """Return tickets oldest first, optionally filtered by category and priority."""
+    """Return tickets in the given order, optionally filtered.
+
+    `order` is "oldest" (the default), "newest" or "priority" (high, medium,
+    low, then unclassified, oldest first within each).
+    """
+    if order not in _ORDER_BY:
+        raise ValueError(f"unknown ticket order {order!r}")
     conditions: list[str] = []
     params: list[Any] = []
     if category is not None:
@@ -87,7 +109,7 @@ def list_tickets(
     query = _SELECT_TICKETS
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY tickets.created_at, tickets.id LIMIT ? OFFSET ?"
+    query += f" ORDER BY {_ORDER_BY[order]} LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     with get_connection() as connection:
         rows = connection.execute(query, params).fetchall()

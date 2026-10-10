@@ -183,6 +183,33 @@ def test_list_tickets_with_no_matches_returns_empty_list(mixed_tickets):
     assert list_tickets(category="account") == []
 
 
+def test_list_tickets_orders_newest_first(mixed_tickets):
+    assert ids(list_tickets(order="newest")) == ["t-4", "t-3", "t-2", "t-1"]
+
+
+def test_list_tickets_orders_by_priority_with_unclassified_last(mixed_tickets):
+    # High before low; within a priority the older ticket comes first.
+    assert ids(list_tickets(order="priority")) == ["t-1", "t-3", "t-2", "t-4"]
+
+
+def test_list_tickets_order_combines_with_filters_and_paging(mixed_tickets):
+    assert ids(list_tickets(category="billing", order="newest")) == ["t-2", "t-1"]
+    assert ids(list_tickets(order="priority", limit=2, offset=1)) == ["t-3", "t-2"]
+
+
+def test_list_tickets_breaks_timestamp_ties_by_id(mixed_tickets):
+    with get_connection() as connection:
+        connection.execute("UPDATE tickets SET created_at = ?", (OLD_TIMESTAMP,))
+
+    assert ids(list_tickets(order="oldest")) == ["t-1", "t-2", "t-3", "t-4"]
+    assert ids(list_tickets(order="newest")) == ["t-4", "t-3", "t-2", "t-1"]
+
+
+def test_list_tickets_rejects_unknown_order():
+    with pytest.raises(ValueError, match="unknown ticket order"):
+        list_tickets(order="tickets.id; DROP TABLE tickets")
+
+
 RESULT = ClassificationResult(
     category=TicketCategory.BILLING,
     priority=TicketPriority.HIGH,

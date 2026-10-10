@@ -253,6 +253,27 @@ def test_list_tickets_applies_offset(client: TestClient, mixed_tickets: None) ->
     assert list_ids(client, {"limit": 2, "offset": 2}) == ["t-3", "t-4"]
 
 
+def test_list_tickets_orders_newest_first(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    assert list_ids(client, {"order": "newest"}) == ["t-4", "t-3", "t-2", "t-1"]
+
+
+def test_list_tickets_orders_by_priority(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    assert list_ids(client, {"order": "priority"}) == ["t-1", "t-3", "t-2", "t-4"]
+
+
+def test_list_tickets_order_combines_with_filters(
+    client: TestClient, mixed_tickets: None
+) -> None:
+    assert list_ids(client, {"category": "billing", "order": "newest"}) == [
+        "t-2",
+        "t-1",
+    ]
+
+
 def test_list_tickets_defaults_to_20_results(client: TestClient) -> None:
     for number in range(21):
         client.post(
@@ -274,6 +295,8 @@ def test_list_tickets_defaults_to_20_results(client: TestClient) -> None:
         {"limit": "ten"},
         {"offset": -1},
         {"offset": "one"},
+        {"order": "random"},
+        {"order": "created_at desc"},
     ],
 )
 def test_list_tickets_rejects_invalid_query_values(
