@@ -23,6 +23,9 @@ const ORDERS = [
 const DEFAULT_ORDER = ORDERS[0].value;
 // Ticket work and pipeline metrics are separate views; tickets is the default.
 const VIEWS = { tickets: "Tickets", metrics: "Metrics" };
+const RUN_STATUSES = ["running", "completed", "failed"];
+const RUN_LABELS = { running: "Running", completed: "Completed", failed: "Failed" };
+const RECENT_RUNS = 15;
 const LABELS = {
   billing: "Billing",
   technical: "Technical",
@@ -89,6 +92,9 @@ const state = {
   category: null,
   order: DEFAULT_ORDER,
   view: "tickets",
+  runSummary: null, // Loaded only while the metrics view is open.
+  runs: [],
+  runFilter: null,
   priority: null,
   page: 0,
   pageTickets: [],
@@ -201,12 +207,12 @@ async function api(path, options = {}) {
   return data;
 }
 
-function listPath(params) {
+function listPath(params, path = "/tickets") {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value != null) query.set(key, value);
   }
-  return `/tickets?${query}`;
+  return `${path}?${query}`;
 }
 
 async function fetchPage() {
@@ -220,6 +226,14 @@ async function fetchPage() {
       offset: state.page * PAGE_SIZE,
     }),
   );
+}
+
+async function fetchRuns() {
+  const [summary, recent] = await Promise.all([
+    api("/internal/runs/summary"),
+    api(listPath({ status: state.runFilter, limit: RECENT_RUNS }, "/internal/runs")),
+  ]);
+  return { summary, recent };
 }
 
 async function fetchOverview() {
@@ -240,8 +254,17 @@ async function refresh({ manual = false } = {}) {
   const refreshButton = $("#refresh");
   if (manual) refreshButton.classList.add("is-spinning");
   try {
-    const [page, overview] = await Promise.all([fetchPage(), fetchOverview()]);
+    const [page, overview, runs] = await Promise.all([
+      fetchPage(),
+      fetchOverview(),
+      // Runs come from an internal endpoint and are only needed for metrics.
+    state.view === "metrics" ? fetchRuns() : null,
+    ]);
     if (seq !== requestSeq) return; // A newer request (e.g. a filter change) owns the view.
+    if (runs) {
+      state.runSummary = runs.summary;
+      state.runs = runs.recent;
+    }
     state.hasMore = page.length > PAGE_SIZE;
     state.pageTickets = page.slice(0, PAGE_SIZE);
     state.all = overview.tickets;
@@ -269,7 +292,10 @@ async function refresh({ manual = false } = {}) {
 }
 
 function hasActiveWork() {
-  return state.all.some((ticket) => ACTIVE.has(ticket.classification_status));
+  return (
+    state.all.some((ticket) => ACTIVE.has(ticket.classification_status)) ||
+    (state.view === "metrics" && state.runSummary?.running > 0)
+  );
 }
 
 function nextDelay() {
@@ -311,6 +337,7 @@ function render() {
   renderBoardHeader();
   renderList();
   renderPager();
+  renderRuns();
 }
 
 function renderConnection() {
@@ -651,6 +678,106 @@ function renderPager() {
   $("#next-page").disabled = !state.hasMore;
 }
 
+// ---------- Rendering: classification runs ----------
+
+function buildRunFilter() {
+  const chip = (value, label) =>
+    h(
+      "button",
+      {
+        class: "chip",
+        type: "button",
+        "data-run-status": value ?? "",
+        "aria-pressed": "false",
+        onclick: () => {
+          state.runFilter = value;
+          renderRunFilter();
+          refresh();
+        },
+      },
+      label,
+    );
+  $("#run-filter").replaceChildren(
+    chip(null, "All"),
+    ...RUN_STATUSES.map((status) => chip(status, RUN_LABELS[status])),
+  );
+}
+
+function renderRunFilter() {
+  for (const chip of document.querySelectorAll("#run-filter .chip")) {
+    chip.setAttribute("aria-pressed", String(chip.dataset.runStatus === (state.runFilter ?? "")));
+  }
+}
+
+function formatDuration(run) {
+  if (!run.finished_at) return null;
+  const ms = new Date(run.finished_at) - new Date(run.started_at);
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.round(ms / 60000)} min`;
+}
+
+function runRow(run) {
+  // Run statuses reuse the ticket status styles: running spins like processing.
+  const pill = statusPill(run.status === "running" ? "processing" : run.status);
+  pill.lastChild.textContent = RUN_LABELS[run.status];
+  return h(
+    "tr",
+    { "data-run-id": run.id, "data-status": run.status },
+    h(
+      "td",
+      {},
+      h(
+        "button",
+        {
+          class: "ticket-link",
+          type: "button",
+          title: `Open ${run.ticket_id}`,
+          onclick: () => openTicket(run.ticket_id),
+        },
+        run.ticket_id,
+      ),
+    ),
+    h("td", {}, `#${run.run_number}`),
+    h("td", {}, pill),
+    h(
+      "td",
+      { class: `run-error${run.error ? "" : " is-empty"}`, title: run.error ?? "" },
+      run.error ?? "—",
+    ),
+    h("td", {}, timeEl(run.started_at)),
+    h("td", { class: "num" }, formatDuration(run) ?? "…"),
+  );
+}
+
+function renderRuns() {
+  renderRunFilter();
+  const summary = state.runSummary;
+  if (!summary) return;
+  setNumber($("#run-running"), summary.running);
+  setNumber($("#run-completed"), summary.completed);
+  setNumber($("#run-failed"), summary.failed);
+  $("#run-running").closest(".stat").classList.toggle("is-busy", summary.running > 0);
+  const finished = summary.completed + summary.failed;
+  $("#run-running-sub").textContent = summary.running ? "In progress now" : "Idle";
+  $("#run-completed-sub").textContent = finished
+    ? `${Math.round((summary.completed / finished) * 100)}% of finished runs`
+    : "No finished runs yet";
+  $("#run-failed-sub").textContent = summary.failed
+    ? `${plural(summary.total, "run")} in total`
+    : "No failed runs";
+
+  const body = $("#runs-body");
+  if (!state.runs.length) {
+    const message = state.runFilter
+      ? `No ${RUN_LABELS[state.runFilter].toLowerCase()} runs`
+      : "No runs yet. Submit a ticket to start one.";
+    body.replaceChildren(h("tr", { class: "empty-row" }, h("td", { colspan: "6" }, message)));
+    return;
+  }
+  body.replaceChildren(...state.runs.map(runRow));
+}
+
 // ---------- Filters, paging & URL ----------
 
 function readUrl() {
@@ -702,6 +829,7 @@ function setView(view) {
   writeUrl({ push: true }); // Back returns to the previous view.
   renderView();
   scrollTo({ top: 0, behavior: "instant" });
+  if (view === "metrics") refresh(); // Runs are only fetched for this view.
 }
 
 // From a metrics breakdown to the tickets behind it. The other filter is
@@ -774,27 +902,27 @@ function goToPage(page) {
   $("#board-title").scrollIntoView({ behavior: reduceMotion.matches ? "auto" : "smooth", block: "start" });
 }
 
-// ---------- Ticket drawer ----------
+// ---------- Ticket popup ----------
 
-const drawer = $("#drawer");
+const popup = $("#popup");
 
 function openTicket(id) {
   const hash = `#ticket=${encodeURIComponent(id)}`;
-  if (location.hash === hash) showDrawer(id);
-  else location.hash = hash; // Adds a history entry, so Back closes the drawer.
+  if (location.hash === hash) showPopup(id);
+  else location.hash = hash; // Adds a history entry, so Back closes the popup.
 }
 
 function routeHash() {
   const match = location.hash.match(/^#ticket=(.+)$/);
-  if (match) showDrawer(decodeURIComponent(match[1]));
-  else if (drawer.open) drawer.close();
+  if (match) showPopup(decodeURIComponent(match[1]));
+  else if (popup.open) popup.close();
 }
 
-function showDrawer(id) {
+function showPopup(id) {
   state.openId = id;
   state.openMissing = false;
-  renderDrawer();
-  if (!drawer.open) drawer.showModal();
+  renderPopup();
+  if (!popup.open) popup.showModal();
   if (!state.all.some((t) => t.id === id)) loadOpenTicket();
 }
 
@@ -810,152 +938,67 @@ async function loadOpenTicket() {
     if (state.openId !== id) return;
     if (error instanceof ApiError && error.status === 404) state.openMissing = true;
   }
-  renderDrawer();
+  renderPopup();
 }
 
 function syncOpenTicket() {
   if (!state.openId) return;
-  if (state.all.some((t) => t.id === state.openId)) renderDrawer();
+  if (state.all.some((t) => t.id === state.openId)) renderPopup();
   else if (!state.openMissing) loadOpenTicket();
 }
 
-drawer.addEventListener("close", () => {
-  // The event fires asynchronously; the drawer may already show another ticket.
-  if (drawer.open) return;
+popup.addEventListener("close", () => {
+  // The event fires asynchronously, so another ticket may have been opened
+  // (or its link set) since. Only clear the link if it is the closed ticket's.
+  if (popup.open) return;
+  const closedId = state.openId;
   state.openId = null;
-  if (location.hash) history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+  if (closedId && location.hash === `#ticket=${encodeURIComponent(closedId)}`) {
+    history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+  }
 });
 
-drawer.addEventListener("click", (event) => {
-  if (event.target === drawer) drawer.close(); // Click on the backdrop.
+popup.addEventListener("click", (event) => {
+  if (event.target === popup) popup.close(); // Click on the backdrop.
 });
 
-function stepStates(status) {
-  return {
-    pending: ["done", "waiting", "todo"],
-    processing: ["done", "active", "todo"],
-    completed: ["done", "done", "done"],
-    failed: ["done", "done", "failed"],
-  }[status];
-}
+// Shown under the title only while there is something to wait for or explain.
+const STATUS_NOTES = {
+  pending: "Waiting to be classified. This usually takes a few seconds.",
+  processing: "Being classified now. This usually takes a few seconds.",
+  failed: `Couldn't be classified after ${MAX_ATTEMPTS} attempts.`,
+};
 
-function progressSteps(status) {
-  const labels = ["Received", status === "pending" ? "Queued" : "Classifying", status === "failed" ? "Failed" : "Classified"];
-  const states = stepStates(status);
+function popupStatus(status) {
+  if (!STATUS_NOTES[status]) return null;
   return h(
-    "ol",
-    { class: "steps", "aria-label": `Progress: ${LABELS[status]}` },
-    ...labels.map((label, index) => {
-      const stepState = states[index];
-      const dot = h("span", { class: "step-dot", "aria-hidden": "true" });
-      if (stepState === "done") dot.append(icon("check"));
-      if (stepState === "failed") dot.append(icon("x"));
-      if (stepState === "active") dot.append(h("span", { class: "spinner" }));
-      return h("li", { class: `step step-${stepState}` }, dot, label);
-    }),
+    "div",
+    { class: "popup-status", "data-status": status },
+    statusPill(status),
+    h("span", {}, STATUS_NOTES[status]),
   );
 }
 
-function classificationPanel(ticket) {
-  const status = ticket.classification_status;
-  const head = h("div", { class: "panel-head" }, h("h3", {}, "Classification"));
-
-  if (status === "completed") {
-    head.append(h("span", { class: "panel-hint" }, icon("shield"), "Validated model output"));
-    return h(
-      "section",
-      { class: "panel classification" },
-      head,
-      h(
-        "div",
-        { class: "class-grid" },
-        h("div", { class: "class-field" }, h("span", { class: "class-label" }, "Category"), badge(ticket.category, true)),
-        h("div", { class: "class-field" }, h("span", { class: "class-label" }, "Priority"), badge(ticket.priority, true)),
-      ),
-      h("blockquote", { class: "summary" }, ticket.summary),
-      h(
-        "p",
-        { class: "panel-note" },
-        "Category and priority were checked against the allowed values before saving. The summary is the model's wording.",
-      ),
-    );
-  }
-
-  if (status === "failed") {
-    return h(
-      "section",
-      { class: "panel" },
-      head,
-      h(
-        "div",
-        { class: "callout callout-failed" },
-        icon("alert"),
-        h(
-          "div",
-          {},
-          h("strong", {}, `No valid classification after ${MAX_ATTEMPTS} attempts`),
-          "The ticket itself is stored safely. Its category, priority and summary stay empty rather than holding unvalidated output.",
-        ),
-      ),
-    );
-  }
-
+function popupClassification(ticket) {
+  if (ticket.classification_status !== "completed") return null;
   return h(
     "section",
-    { class: "panel" },
-    head,
+    { class: "popup-section" },
     h(
       "div",
-      { class: "callout callout-waiting" },
-      icon("sparkle"),
-      h(
-        "div",
-        {},
-        h("strong", {}, status === "pending" ? "Waiting for a worker" : "Classifying now"),
-        "This usually takes a moment. This panel updates by itself.",
-      ),
+      { class: "popup-badges" },
+      badge(ticket.category, true),
+      h("span", { class: "badge badge-lg", "data-value": ticket.priority }, `${LABELS[ticket.priority]} priority`),
     ),
-    h(
-      "div",
-      { class: "pending-lines", "aria-hidden": "true" },
-      h("div", { class: "skeleton-line", style: "width: 45%" }),
-      h("div", { class: "skeleton-line", style: "width: 85%" }),
-      h("div", { class: "skeleton-line", style: "width: 70%" }),
-    ),
+    h("p", { class: "popup-summary" }, ticket.summary),
   );
 }
 
-function drawerNav(id) {
-  const index = state.pageTickets.findIndex((t) => t.id === id);
-  if (index === -1) return null;
-  const prev = state.pageTickets[index - 1];
-  const next = state.pageTickets[index + 1];
-  return h(
-    "nav",
-    { class: "drawer-nav", "aria-label": "Other tickets" },
-    h(
-      "button",
-      { class: "btn btn-ghost btn-sm", type: "button", disabled: !prev, onclick: () => prev && openTicket(prev.id) },
-      icon("up"),
-      "Previous",
-      h("kbd", {}, "K"),
-    ),
-    h(
-      "button",
-      { class: "btn btn-ghost btn-sm", type: "button", disabled: !next, onclick: () => next && openTicket(next.id) },
-      "Next",
-      h("kbd", {}, "J"),
-      icon("down"),
-    ),
-  );
-}
-
-function renderDrawer() {
+function renderPopup() {
   const id = state.openId;
   if (!id) return;
-  $("#drawer-id").textContent = id;
-  const body = $("#drawer-body");
-  const scroll = body.scrollTop;
+  popup.dataset.ticketId = id;
+  const body = $("#popup-body");
 
   if (state.openMissing) {
     body.replaceChildren(
@@ -963,7 +1006,7 @@ function renderDrawer() {
         "div",
         { class: "empty" },
         h("span", { class: "empty-icon" }, icon("search")),
-        h("h2", { id: "drawer-title" }, "Ticket not found"),
+        h("h2", { id: "popup-title" }, "Ticket not found"),
         h("p", {}, "There's no ticket with this id. It may have been typed or linked incorrectly."),
       ),
     );
@@ -973,42 +1016,40 @@ function renderDrawer() {
   const ticket = state.all.find((t) => t.id === id);
   if (!ticket) {
     body.replaceChildren(
-      h("h2", { id: "drawer-title", class: "skeleton-line", style: "height: 1.6rem; width: 60%" }),
-      h("div", { class: "skeleton", style: "height: 9rem" }),
-      h("div", { class: "skeleton", style: "height: 12rem" }),
+      h("h2", { id: "popup-title", class: "skeleton-line", style: "height: 1.6rem; width: 60%" }),
+      h("div", { class: "skeleton", style: "height: 8rem" }),
     );
     return;
   }
 
+  const scroll = body.scrollTop;
+  // replaceChildren would print null as text, so drop the absent parts.
   body.replaceChildren(
-    h(
-      "h2",
-      { class: "drawer-subject", id: "drawer-title" },
-      ticket.subject || h("span", { class: "muted-italic" }, "No subject"),
-    ),
-    progressSteps(ticket.classification_status),
-    classificationPanel(ticket),
-    h(
-      "section",
-      { class: "panel" },
-      h("h3", {}, "Customer message"),
-      h("p", { class: "message" }, ticket.body),
-    ),
-    h(
-      "dl",
-      { class: "meta" },
-      h("dt", {}, "Received"),
-      h("dd", {}, absoluteFormat.format(new Date(ticket.created_at)), " · ", timeEl(ticket.created_at)),
-      h("dt", {}, "Last updated"),
-      h("dd", {}, absoluteFormat.format(new Date(ticket.updated_at)), " · ", timeEl(ticket.updated_at)),
-    ),
-    // replaceChildren would print null as text; the nav only exists for the current page.
-    ...[drawerNav(id)].filter(Boolean),
+    ...[
+      h(
+        "header",
+        { class: "popup-header" },
+        h(
+          "h2",
+          { class: "popup-subject", id: "popup-title" },
+          ticket.subject || h("span", { class: "muted-italic" }, "No subject"),
+        ),
+        h("p", { class: "popup-meta" }, h("span", { class: "mono" }, ticket.id), " · Received ", timeEl(ticket.created_at)),
+      ),
+      popupStatus(ticket.classification_status),
+      popupClassification(ticket),
+      h(
+        "section",
+        { class: "popup-section" },
+        h("h3", {}, "Message"),
+        h("p", { class: "message" }, ticket.body),
+      ),
+    ].filter(Boolean),
   );
   body.scrollTop = scroll;
 }
 
-function stepDrawer(direction) {
+function stepPopup(direction) {
   const index = state.pageTickets.findIndex((t) => t.id === state.openId);
   const target = state.pageTickets[index + direction];
   if (index !== -1 && target) openTicket(target.id);
@@ -1277,13 +1318,13 @@ document.addEventListener("keydown", (event) => {
   if (event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) return;
   if (composer.open) return;
   const key = event.key.toLowerCase();
-  if (drawer.open) {
+  if (popup.open) {
     if (key === "j" || event.key === "ArrowDown") {
       event.preventDefault();
-      stepDrawer(1);
+      stepPopup(1);
     } else if (key === "k" || event.key === "ArrowUp") {
       event.preventDefault();
-      stepDrawer(-1);
+      stepPopup(-1);
     }
     return;
   }
@@ -1309,13 +1350,13 @@ function init() {
   readUrl();
   buildFilters();
   buildSort();
+  buildRunFilter();
   buildExamples();
 
   for (const el of document.querySelectorAll("[data-icon]")) el.replaceChildren(icon(el.dataset.icon));
   $("#refresh").replaceChildren(icon("refresh"));
-  $("#close-drawer").replaceChildren(icon("x"));
+  $("#close-popup").replaceChildren(icon("x"));
   $("#close-composer").replaceChildren(icon("x"));
-  $("#copy-id").replaceChildren(icon("copy"));
   renderThemeButton();
 
   $("#new-ticket").addEventListener("click", openComposer);
@@ -1332,8 +1373,7 @@ function init() {
   $("#clear-filters").addEventListener("click", clearFilters);
   $("#prev-page").addEventListener("click", () => goToPage(state.page - 1));
   $("#next-page").addEventListener("click", () => goToPage(state.page + 1));
-  $("#close-drawer").addEventListener("click", () => drawer.close());
-  $("#copy-id").addEventListener("click", () => state.openId && copyText(state.openId, `Copied ${state.openId}`));
+  $("#close-popup").addEventListener("click", () => popup.close());
   $("#close-composer").addEventListener("click", () => composer.close());
   $("#cancel-composer").addEventListener("click", () => composer.close());
   composer.addEventListener("click", (event) => {

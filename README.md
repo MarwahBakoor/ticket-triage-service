@@ -76,13 +76,17 @@ The dashboard has two tabs at the top: **Tickets** and **Metrics**.
 | Submit a ticket | Click **New ticket** (or press `N`). An id is suggested, the subject is optional, and **Try an example** fills in a sample. |
 | Filter | Click the category and priority chips above the list. |
 | Sort | Choose **Oldest**, **Newest** or **Priority** in the **Sort** control. |
-| See a ticket | Click it to open the full message, its classification and its progress. |
+| See a ticket | Click it to open it in a popup: its category, priority, summary and the customer's message. |
 
 ### Metrics
 
-Shows how classification is going: the total number of tickets, how many are
-waiting, classified or failed, and breakdowns by category and priority. Click
-any breakdown to see those tickets.
+Shows how classification is going:
+
+- **Tickets**: how many are waiting, classified or failed, and breakdowns by
+  category and priority. Click any breakdown to see those tickets.
+- **Classification runs**: every attempt to classify a ticket is a run. See
+  how many are running, completed or failed, and a live list of recent runs
+  with their errors. A failed run is retried, up to 3 attempts per ticket.
 
 ### Tips
 

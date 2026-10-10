@@ -116,6 +116,11 @@
           <h1 id="metrics-title">Metrics</h1>
           <p class="board-sub">Health of the classification pipeline, updated live.</p>
         </header>
+
+        <header class="section-head">
+          <h2>Tickets</h2>
+          <p>Where every submitted ticket stands now.</p>
+        </header>
         <div class="stats">
           <article class="stat" data-tone="neutral">
             <div class="stat-head"><span class="stat-icon" data-icon="inbox"></span>Total</div>
@@ -158,19 +163,60 @@
             <ul class="legend" id="priority-legend"></ul>
           </article>
         </div>
+
+        <header class="section-head" id="runs-section">
+          <h2 id="runs-title">Classification runs</h2>
+          <p>
+            Each attempt to classify a ticket is a run. A failed run is retried, up to 3
+            attempts per ticket.
+          </p>
+        </header>
+        <div class="stats stats-3" aria-labelledby="runs-title">
+          <article class="stat" data-tone="running">
+            <div class="stat-head"><span class="stat-icon" data-icon="refresh"></span>Running</div>
+            <div class="stat-value" id="run-running">0</div>
+            <div class="stat-sub" id="run-running-sub">&nbsp;</div>
+          </article>
+          <article class="stat" data-tone="done">
+            <div class="stat-head"><span class="stat-icon" data-icon="check"></span>Completed</div>
+            <div class="stat-value" id="run-completed">0</div>
+            <div class="stat-sub" id="run-completed-sub">&nbsp;</div>
+          </article>
+          <article class="stat" data-tone="failed">
+            <div class="stat-head"><span class="stat-icon" data-icon="alert"></span>Failed</div>
+            <div class="stat-value" id="run-failed">0</div>
+            <div class="stat-sub" id="run-failed-sub">&nbsp;</div>
+          </article>
+        </div>
+
+        <article class="dist runs-card">
+          <header class="dist-head runs-head">
+            <h2 id="recent-runs-title">Recent runs</h2>
+            <div class="chip-row" role="group" aria-label="Show runs by status" id="run-filter"></div>
+          </header>
+          <div class="table-wrap">
+            <table class="runs-table" aria-labelledby="recent-runs-title">
+              <thead>
+                <tr>
+                  <th scope="col">Ticket</th>
+                  <th scope="col">Run</th>
+                  <th scope="col">Status</th>
+                  <th scope="col">Error</th>
+                  <th scope="col">Started</th>
+                  <th scope="col" class="num">Duration</th>
+                </tr>
+              </thead>
+              <tbody id="runs-body"></tbody>
+            </table>
+          </div>
+        </article>
       </section>
     </main>
 
-    <dialog class="drawer" id="drawer" aria-labelledby="drawer-title">
-      <div class="drawer-panel">
-        <header class="drawer-head">
-          <div class="drawer-id">
-            <span class="mono" id="drawer-id"></span>
-            <button class="icon-btn icon-btn-sm" id="copy-id" type="button" aria-label="Copy ticket id" title="Copy id"></button>
-          </div>
-          <button class="icon-btn" id="close-drawer" type="button" aria-label="Close ticket"></button>
-        </header>
-        <div class="drawer-body" id="drawer-body"></div>
+    <dialog class="popup" id="popup" aria-labelledby="popup-title">
+      <div class="popup-panel">
+        <button class="icon-btn popup-close" id="close-popup" type="button" aria-label="Close ticket"></button>
+        <div class="popup-body" id="popup-body"></div>
       </div>
     </dialog>
 
