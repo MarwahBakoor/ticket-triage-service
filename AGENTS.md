@@ -8,6 +8,7 @@ app/
 ├── main.py
 ├── test_main.py
 ├── constants.py
+├── labels.py
 ├── api/
 │   ├── schemas.py
 │   ├── tickets.py
@@ -65,6 +66,7 @@ create empty modules or directories merely to match this tree.
 # Architecture boundaries
 
 - `app/api/`: FastAPI routes, HTTP status codes, request and response handling.
+  Nothing outside `app/api/` imports from it.
 - `app/db/`: SQLite connections, schema initialization, and explicit
   parameterized SQL.
 - `app/llm/`: LLM interface, prompt construction, and raw-output validation.
@@ -79,6 +81,8 @@ create empty modules or directories merely to match this tree.
 - `app/constants.py`: tunable values (attempts, timeout, retry delay, worker
   count, summary length). Code reads them as `constants.NAME`, so tests can
   monkeypatch this one module.
+- `app/labels.py`: the allowed ticket categories and priorities. The prompt,
+  output validation and API all import them from here.
 - `frontend/`: the static dashboard (plain HTML, CSS and JavaScript, no build
   step). It talks to the API only over HTTP and inserts ticket text as text,
   never as HTML.

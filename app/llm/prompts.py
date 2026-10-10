@@ -1,6 +1,6 @@
 import json
 
-from app.api.schemas import TicketCategory, TicketPriority
+from app.labels import TicketCategory, TicketPriority
 
 TICKET_START = "<ticket>"
 TICKET_END = "</ticket>"

@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from app.api.schemas import TicketCategory, TicketPriority
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
 from app.db.tickets import (
@@ -21,6 +20,7 @@ from app.db.tickets import (
     reset_for_reclassification,
     start_run,
 )
+from app.labels import TicketCategory, TicketPriority
 from app.llm.validation import ClassificationResult
 
 

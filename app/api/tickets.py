@@ -3,19 +3,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 
-from app.api.schemas import (
-    TicketCategory,
-    TicketCreate,
-    TicketOrder,
-    TicketPriority,
-    TicketResponse,
-)
+from app.api.schemas import TicketCreate, TicketOrder, TicketResponse
 from app.db.tickets import (
     create_ticket,
     get_ticket,
     list_tickets,
     reset_for_reclassification,
 )
+from app.labels import TicketCategory, TicketPriority
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 

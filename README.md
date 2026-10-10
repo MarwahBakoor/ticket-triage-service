@@ -251,6 +251,7 @@ model.
 app/
 ├── main.py             App wiring: lifespan, workers, dashboard
 ├── constants.py        Tunable values: attempts, timeout, retry delay, limits
+├── labels.py           Allowed categories and priorities
 ├── api/                HTTP routes and request/response models
 ├── db/                 Schema and parameterized SQL
 ├── llm/                Client interface, keyword stand-in model, prompt,

@@ -3,7 +3,7 @@ import json
 import pytest
 
 from app import constants
-from app.api.schemas import TicketCategory, TicketPriority
+from app.labels import TicketCategory, TicketPriority
 from app.llm.fake import (
     EMPTY_SUMMARY_RESPONSE,
     INVALID_CATEGORY_RESPONSE,

@@ -3,18 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-class TicketCategory(StrEnum):
-    BILLING = "billing"
-    TECHNICAL = "technical"
-    ACCOUNT = "account"
-    OTHER = "other"
-
-
-class TicketPriority(StrEnum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
+from app.labels import TicketCategory, TicketPriority
 
 
 class TicketOrder(StrEnum):

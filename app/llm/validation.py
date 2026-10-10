@@ -1,7 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app import constants
-from app.api.schemas import TicketCategory, TicketPriority
+from app.labels import TicketCategory, TicketPriority
 
 
 class ClassificationError(ValueError):
