@@ -50,11 +50,8 @@ app = FastAPI(
     version="0.1.0",
     summary="Ingest support tickets and classify them asynchronously with an LLM.",
     description=(
-        "Submitting a ticket stores it and returns `202 Accepted` straight away; "
-        "classification runs afterwards on a background worker. Poll the ticket "
-        "and watch `classification_status` move from `pending` through "
-        "`processing` to `classified` or `failed`. See `docs/API.md` for the "
-        "full guide."
+        "Submit a ticket, then poll it until `classification_status` is "
+        "`classified` or `failed`."
     ),
     openapi_tags=[
         {"name": "tickets", "description": "Submit, read and list tickets."},

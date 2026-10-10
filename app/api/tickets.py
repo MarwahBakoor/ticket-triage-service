@@ -28,12 +28,9 @@ NOT_FOUND_RESPONSE = {
     response_model=TicketResponse,
     summary="Submit a ticket",
     description=(
-        "Store a ticket and queue it for classification. The response is "
-        "returned before classification runs, so it has "
-        "`classification_status: pending` and null classification fields.\n\n"
-        "Submitting is idempotent by `id`: if the id already exists, the stored "
-        "ticket is returned unchanged (also with `202`), the new subject and "
-        "body are ignored, and it is not classified again."
+        "Classification happens in the background, so the ticket comes back "
+        "`pending`. Resubmitting an existing id returns the stored ticket "
+        "unchanged."
     ),
     response_description="The stored ticket.",
 )
@@ -57,12 +54,7 @@ async def submit_ticket(ticket: TicketCreate, request: Request) -> TicketRespons
     "",
     response_model=list[TicketResponse],
     summary="List tickets",
-    description=(
-        "Return a page of tickets. `category` and `priority` filters match "
-        "classified tickets only, because a ticket has neither until it is "
-        "classified. Pagination is offset-based: request the next page with "
-        "`offset + limit` until fewer than `limit` tickets come back."
-    ),
+    description="Filters only match classified tickets.",
     response_description="A page of tickets, possibly empty.",
 )
 def read_tickets(
@@ -78,12 +70,7 @@ def read_tickets(
     offset: Annotated[int, Query(ge=0, description="Number of tickets to skip.")] = 0,
     order: Annotated[
         TicketOrder,
-        Query(
-            description=(
-                "`oldest` and `newest` sort by submission time. `priority` sorts "
-                "high, medium, low, then unclassified, oldest first within each."
-            )
-        ),
+        Query(description="`priority` puts high first and unclassified last."),
     ] = TicketOrder.OLDEST,
 ) -> list[TicketResponse]:
     stored = list_tickets(category, priority, limit, offset, order)
@@ -94,10 +81,7 @@ def read_tickets(
     "/{ticket_id}",
     response_model=TicketResponse,
     summary="Get a ticket",
-    description=(
-        "Return one ticket with its current classification status. Poll this "
-        "after submitting to see the classification arrive."
-    ),
+    description="Poll until `classification_status` is `classified` or `failed`.",
     responses=NOT_FOUND_RESPONSE,
 )
 def read_ticket(
@@ -115,20 +99,16 @@ def read_ticket(
     "/{ticket_id}/reclassify",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=TicketResponse,
-    summary="Classify a ticket again",
+    summary="Reclassify a ticket",
     description=(
-        "Queue a `classified` or `failed` ticket for a fresh classification, "
-        "for example after a prompt change or a model outage. Its previous "
-        "result is cleared, it gets a new set of attempts, and it is "
-        "returned as `pending`.\n\n"
-        "A ticket that is still `pending` or `processing` returns `409`, so "
-        "repeating the request never queues a ticket twice."
+        "Only for `classified` or `failed` tickets. The old result is cleared "
+        "and the ticket goes back to `pending`."
     ),
     response_description="The ticket, now pending.",
     responses=NOT_FOUND_RESPONSE
     | {
         status.HTTP_409_CONFLICT: {
-            "description": "The ticket is still pending or processing.",
+            "description": "The ticket is still being classified.",
             "content": {
                 "application/json": {
                     "example": {"detail": "Ticket is still being classified"}

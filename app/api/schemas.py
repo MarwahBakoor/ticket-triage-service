@@ -35,10 +35,10 @@ class TicketCreate(BaseModel):
 
     id: str = Field(
         min_length=1,
-        description="Caller-chosen unique id. Resubmitting an id is a no-op.",
+        description="Unique id, chosen by you.",
     )
     # Required, but may be empty: emailed tickets can arrive without a subject.
-    subject: str = Field(description="Required, but may be an empty string.")
+    subject: str = Field(description="May be empty.")
     body: str = Field(min_length=1, description="The customer's message.")
 
 
@@ -64,24 +64,13 @@ class TicketResponse(BaseModel):
     id: str
     subject: str
     body: str
-    category: TicketCategory | None = Field(
-        description="Null until the ticket is classified, and if it failed."
-    )
-    priority: TicketPriority | None = Field(
-        description="Null until the ticket is classified, and if it failed."
-    )
-    summary: str | None = Field(
-        description="One-sentence summary written by the model; null until classified."
-    )
-    created_at: datetime = Field(description="When the ticket was submitted (UTC).")
-    updated_at: datetime = Field(
-        description="When the ticket was last changed, e.g. by its classification."
-    )
+    category: TicketCategory | None = Field(description="Null until classified.")
+    priority: TicketPriority | None = Field(description="Null until classified.")
+    summary: str | None = Field(description="Null until classified.")
+    created_at: datetime = Field(description="When it was submitted (UTC).")
+    updated_at: datetime = Field(description="When it last changed (UTC).")
     classification_status: ClassificationJobStatus = Field(
-        description=(
-            "pending → processing → classified or failed. failed means no valid "
-            "classification after 3 attempts."
-        )
+        description="`failed` means no valid classification after 3 attempts."
     )
 
 
