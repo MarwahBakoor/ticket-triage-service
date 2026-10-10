@@ -1,5 +1,6 @@
 import asyncio
 
+from app import constants
 from app.db.tickets import (
     complete_classification,
     get_classification_job,
@@ -13,16 +14,10 @@ from app.llm.client import LLMClient
 from app.llm.prompts import build_classification_prompt
 from app.llm.validation import ClassificationError, parse_classification
 
-MAX_ATTEMPTS = 3
-# A call that has not answered by then counts as a failed attempt, so a hung
-# provider cannot hold a worker forever.
-LLM_TIMEOUT_SECONDS = 30.0
-RETRY_BASE_DELAY_SECONDS = 1.0
-
 
 def retry_delay(failed_attempts: int) -> float:
     """Seconds to wait before the next attempt: 1, 2, 4, … times the base."""
-    return RETRY_BASE_DELAY_SECONDS * 2 ** (failed_attempts - 1)
+    return constants.RETRY_BASE_DELAY_SECONDS * 2 ** (failed_attempts - 1)
 
 
 async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
@@ -42,7 +37,7 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
         job = await asyncio.to_thread(get_classification_job, ticket_id)
         if job is None:
             return False
-        if job["attempts"] >= MAX_ATTEMPTS:
+        if job["attempts"] >= constants.MAX_ATTEMPTS:
             await asyncio.to_thread(mark_job_failed, ticket_id)
             return False
         if job["attempts"]:
@@ -58,7 +53,7 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
         # Errors are stored as fixed text so untrusted model output never leaks in.
         try:
             raw_output = await asyncio.wait_for(
-                llm.classify(prompt), LLM_TIMEOUT_SECONDS
+                llm.classify(prompt), constants.LLM_TIMEOUT_SECONDS
             )
         except Exception as error:  # noqa: BLE001 - any client error is retryable
             run_error = f"LLM call failed: {type(error).__name__}"

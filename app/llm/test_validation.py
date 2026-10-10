@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from app import constants
 from app.api.schemas import TicketCategory, TicketPriority
 from app.llm.fake import (
     EMPTY_SUMMARY_RESPONSE,
@@ -11,7 +12,6 @@ from app.llm.fake import (
     VALID_RESPONSE,
 )
 from app.llm.validation import (
-    MAX_SUMMARY_LENGTH,
     ClassificationError,
     ClassificationResult,
     parse_classification,
@@ -55,9 +55,9 @@ def test_strips_surrounding_whitespace_from_summary():
 
 
 def test_accepts_summary_at_maximum_length():
-    output = json.dumps(VALID_OUTPUT | {"summary": "x" * MAX_SUMMARY_LENGTH})
+    output = json.dumps(VALID_OUTPUT | {"summary": "x" * constants.MAX_SUMMARY_LENGTH})
 
-    assert len(parse_classification(output).summary) == MAX_SUMMARY_LENGTH
+    assert len(parse_classification(output).summary) == constants.MAX_SUMMARY_LENGTH
 
 
 @pytest.mark.parametrize(
@@ -78,7 +78,9 @@ def test_accepts_summary_at_maximum_length():
             json.dumps(VALID_OUTPUT | {"extra": "field"}), id="unexpected-field"
         ),
         pytest.param(
-            json.dumps(VALID_OUTPUT | {"summary": "x" * (MAX_SUMMARY_LENGTH + 1)}),
+            json.dumps(
+                VALID_OUTPUT | {"summary": "x" * (constants.MAX_SUMMARY_LENGTH + 1)}
+            ),
             id="summary-too-long",
         ),
         pytest.param(

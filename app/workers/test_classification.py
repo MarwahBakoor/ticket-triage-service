@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from app import constants
 from app.db.schema import initialize_database
 from app.db.tickets import create_ticket, get_classification_job, get_ticket
 from app.llm.fake import (
@@ -12,7 +13,6 @@ from app.llm.fake import (
     FakeLLMClient,
 )
 from app.workers.classification import (
-    DEFAULT_WORKER_COUNT,
     ClassificationWorkers,
     worker_count_from_env,
 )
@@ -61,7 +61,7 @@ def test_worker_keeps_running_after_a_failed_ticket():
     assert get_classification_job("t-2")["status"] == "classified"
 
 
-@pytest.mark.parametrize("worker_count", [1, DEFAULT_WORKER_COUNT])
+@pytest.mark.parametrize("worker_count", [1, constants.DEFAULT_WORKER_COUNT])
 def test_runs_at_most_worker_count_classifications_at_once(worker_count):
     ticket_ids = [f"t-{number}" for number in range(worker_count + 2)]
     for ticket_id in ticket_ids:

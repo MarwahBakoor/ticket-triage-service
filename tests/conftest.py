@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.classification import service
+from app import constants
 from app.main import app
 
 
@@ -22,4 +22,4 @@ def no_default_llm_client(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def no_retry_delay(monkeypatch: pytest.MonkeyPatch) -> None:
     """Retry immediately; tests that check the backoff set their own delay."""
-    monkeypatch.setattr(service, "RETRY_BASE_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(constants, "RETRY_BASE_DELAY_SECONDS", 0.0)

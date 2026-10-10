@@ -249,6 +249,7 @@ model.
 ```text
 app/
 ├── main.py             App wiring: lifespan, workers, dashboard
+├── constants.py        Tunable values: attempts, timeout, retry delay, limits
 ├── api/                HTTP routes and request/response models
 ├── db/                 Schema and parameterized SQL
 ├── llm/                Client interface, fakes, prompt, output validation

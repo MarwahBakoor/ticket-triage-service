@@ -2,17 +2,16 @@ import asyncio
 import logging
 import os
 
+from app import constants
 from app.classification.service import classify_ticket
 from app.llm.client import LLMClient
-
-DEFAULT_WORKER_COUNT = 4
 
 logger = logging.getLogger(__name__)
 
 
 def worker_count_from_env() -> int:
     """Read CLASSIFICATION_WORKERS, defaulting to DEFAULT_WORKER_COUNT."""
-    raw = os.environ.get("CLASSIFICATION_WORKERS", str(DEFAULT_WORKER_COUNT))
+    raw = os.environ.get("CLASSIFICATION_WORKERS", str(constants.DEFAULT_WORKER_COUNT))
     try:
         count = int(raw)
     except ValueError:

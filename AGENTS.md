@@ -7,6 +7,7 @@ a clear reason.
 app/
 ├── main.py
 ├── test_main.py
+├── constants.py
 ├── api/
 │   ├── schemas.py
 │   ├── tickets.py
@@ -73,6 +74,9 @@ create empty modules or directories merely to match this tree.
   recovery.
 - `app/main.py`: application creation and lifecycle wiring, including serving
   the dashboard.
+- `app/constants.py`: tunable values (attempts, timeout, retry delay, worker
+  count, summary length). Code reads them as `constants.NAME`, so tests can
+  monkeypatch this one module.
 - `frontend/`: the static dashboard (plain HTML, CSS and JavaScript, no build
   step). It talks to the API only over HTTP and inserts ticket text as text,
   never as HTML.

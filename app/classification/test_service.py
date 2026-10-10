@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.classification import service
-from app.classification.service import MAX_ATTEMPTS, classify_ticket
+from app import constants
+from app.classification.service import classify_ticket
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
 from app.db.tickets import create_ticket, get_classification_job, get_ticket
@@ -108,14 +108,14 @@ def test_three_failures_mark_job_failed():
 def test_llm_call_that_hangs_times_out_and_counts_as_failed_attempt(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(service, "LLM_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(constants, "LLM_TIMEOUT_SECONDS", 0.01)
     create_ticket("t-1", "Double charge", "I was charged twice this month")
     llm = BlockingFakeLLMClient()  # Never released, so every call hangs.
 
     classified = asyncio.run(classify_ticket("t-1", llm))
 
     assert classified is False
-    assert len(llm.prompts) == MAX_ATTEMPTS
+    assert len(llm.prompts) == constants.MAX_ATTEMPTS
     job = get_classification_job("t-1")
     assert job["status"] == "failed"
     assert runs_for("t-1")[-1][2] == "LLM call failed: TimeoutError"
@@ -124,7 +124,7 @@ def test_llm_call_that_hangs_times_out_and_counts_as_failed_attempt(
 def test_waits_with_exponential_backoff_before_each_retry(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(service, "RETRY_BASE_DELAY_SECONDS", 1.0)
+    monkeypatch.setattr(constants, "RETRY_BASE_DELAY_SECONDS", 1.0)
     delays: list[float] = []
 
     async def record_sleep(seconds: float) -> None:
