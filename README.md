@@ -1,178 +1,192 @@
-# Ticket-triage service
+# Ticket Triage Service
 
-A FastAPI service that ingests support tickets, classifies them asynchronously
-with an LLM, validates the model output, and serves the results.
+Submit customer support tickets and get each one automatically sorted into a
+**category** (billing, technical, account, other) and a **priority** (low,
+medium, high), with a one-sentence **summary**. It comes with a web dashboard
+and a JSON API.
 
-## Running
+## Quick start
 
-Prerequisites: Python 3.12+ and [uv](https://docs.astral.sh/uv/). SQLite ships
-with Python.
+You need **Python 3.12+** and **[uv](https://docs.astral.sh/uv/getting-started/installation/)**.
 
 ```sh
-uv sync
+git clone https://github.com/MarwahBakoor/ticket-triage-service.git
+cd ticket-triage-service
+uv sync                                  # install dependencies
+uv run uvicorn app.main:app --reload     # start the service
+```
+
+Open **<http://127.0.0.1:8000/>**. To see it with data, load the sample
+tickets from a second terminal:
+
+```sh
+uv run python scripts/load_samples.py
+```
+
+The ten samples appear on the dashboard and are classified within moments.
+
+## Running the service
+
+Start it from the project folder:
+
+```sh
 uv run uvicorn app.main:app --reload
-curl http://127.0.0.1:8000/health
 ```
 
-The database is `tickets.db` in the current directory, created on startup. To
-use another file:
+- `--reload` restarts the service when you change code. Leave it out for a
+  normal run.
+- Use another port with `--port 8001`.
+- Stop it with `Ctrl+C`. Tickets are saved, and anything left unfinished is
+  picked up again on the next start.
+
+Tickets are stored in `tickets.db` in the folder you start the service from.
+It is created automatically on first run.
+
+| Link | What it is |
+| --- | --- |
+| <http://127.0.0.1:8000/> | The dashboard |
+| <http://127.0.0.1:8000/docs> | Interactive API documentation |
+| <http://127.0.0.1:8000/health> | Health check, returns `{"status": "ok"}` |
+
+### Configuration
+
+Set these environment variables before starting the service:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DATABASE_PATH` | `tickets.db` | Where to store tickets. |
+| `CLASSIFICATION_WORKERS` | `4` | How many tickets are classified at the same time. Must be at least 1. |
 
 ```sh
-export DATABASE_PATH=/path/to/tickets.db
+DATABASE_PATH=/tmp/demo.db CLASSIFICATION_WORKERS=2 uv run uvicorn app.main:app
 ```
 
-Classification concurrency is set with `CLASSIFICATION_WORKERS` (default `4`).
+### Loading sample tickets
 
-Load the ten sample tickets (`t-1001`–`t-1010`) into a running service:
+`scripts/load_samples.py` submits the ten tickets in
+`sample_data/tickets.json` (`t-1001` to `t-1010`) to a running service:
 
 ```sh
-uv run python scripts/load_samples.py                     # http://127.0.0.1:8000
-uv run python scripts/load_samples.py http://host:port
+uv run python scripts/load_samples.py                        # service on port 8000
+uv run python scripts/load_samples.py http://127.0.0.1:8001  # another address
 ```
 
-The loader posts each ticket through `POST /tickets`, so rerunning it is safe.
+It is safe to run more than once: tickets that already exist are left
+unchanged.
 
-No real model is called. The running app uses `KeywordFakeLLMClient`
-(`app/llm/fake.py`), which classifies by keyword matching and returns malformed
-JSON on every 4th call so retries happen during local use. After loading the
-samples, `GET /tickets` shows them classified within moments. Tests replace it
-with scripted fakes via `app.state.llm_client`.
+### About the classifier
 
-Tests and lint:
+No real AI model is connected yet. The service uses a built-in stand-in that
+classifies by keywords, so results are plausible but not always right. On
+purpose, every 4th classification attempt fails and is retried automatically,
+so you can see retries happen. A ticket that fails 3 times is marked
+**Failed**.
+
+## Using the dashboard
+
+The dashboard has two tabs at the top.
+
+**Tickets** is where you work with tickets:
+
+- **Submit a ticket** with **New ticket** (or press `N`). An id is suggested
+  for you, the subject is optional, and **Try an example** fills in a sample.
+- **Filter** by category and priority with the chips above the list.
+- **Sort** by oldest, newest or priority with the **Sort** control.
+- **Open a ticket** by clicking it. You'll see the full message, its
+  classification and its progress, which updates by itself while the ticket is
+  being classified.
+
+**Metrics** shows how classification is going: totals, tickets still in the
+queue, classified and failed counts, and breakdowns by category and priority.
+Click any breakdown to see those tickets.
+
+Everything updates live, so there is no need to refresh. Filters, sorting and
+open tickets are part of the page address, so you can bookmark or share a view.
+
+| Key | Action |
+| --- | --- |
+| `T` / `M` | Go to Tickets / Metrics |
+| `N` | New ticket |
+| `S` | Change sort order |
+| `R` | Refresh now |
+| `J` / `K` | Next / previous ticket while one is open |
+| `Esc` | Close the open ticket or form |
+
+## Using the API
+
+Submit a ticket. It is accepted straight away and classified in the
+background:
 
 ```sh
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
+curl -X POST http://127.0.0.1:8000/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"id": "t-2001", "subject": "API returning 500s", "body": "Every export call fails since 09:00."}'
 ```
 
-Tests use temporary SQLite files and fake LLMs; they never touch `tickets.db`
-or a live model.
-
-## API
-
-| Method | Path            | Result                                                      |
-| ------ | --------------- | ----------------------------------------------------------- |
-| POST   | `/tickets`      | `202` with the stored ticket; `422` on invalid input        |
-| GET    | `/tickets/{id}` | `200` with the ticket; `404` if unknown                     |
-| GET    | `/tickets`      | `200` with a list, oldest first; `422` on invalid query     |
-
-`POST /tickets` takes `{"id", "subject", "body"}`. `id` and `body` must be
-non-empty; `subject` is required but may be empty. Resubmitting an existing id
-returns the stored ticket unchanged and does not classify it again.
-
-Every ticket response includes `category`, `priority` and `summary` (null until
-classified) and `classification_status`: `pending`, `processing`, `completed`
-or `failed`.
-
-Filtering and pagination on `GET /tickets`:
-
-- `category`: `billing`, `technical`, `account` or `other`
-- `priority`: `low`, `medium` or `high`
-- `limit`: 1–100, default 20
-- `offset`: ≥ 0, default 0
+Check on it until `classification_status` is `completed` or `failed`:
 
 ```sh
-curl "http://127.0.0.1:8000/tickets?category=billing&priority=high&limit=10&offset=0"
+curl http://127.0.0.1:8000/tickets/t-2001
 ```
 
-## Data model
+List tickets, with optional filters, sort order and paging:
 
-- `tickets`: the ticket content plus the latest successful `category`,
-  `priority` and `summary`.
-- `classification_jobs`: one row per ticket with the async status, `attempts`
-  and `last_error`.
+```sh
+curl "http://127.0.0.1:8000/tickets?category=technical&order=priority&limit=10"
+```
 
-Operational state lives apart from the ticket so that the ticket only holds
-validated results. Retries, errors and status transitions change the job row
-without touching ticket data, and a validated result plus the `completed`
-status are written in one transaction. Both CHECK constraints and the
-application restrict the allowed values. There are no foreign keys; the
-relationship is enforced in application code.
+See **[API.md](API.md)** for every endpoint, parameter and error, or try the
+API in your browser at <http://127.0.0.1:8000/docs>.
 
-## Async execution
-
-`POST /tickets` stores the ticket and its `pending` job in one transaction. Only
-when the ticket is new, and after that commit, is its id put on an in-process
-`asyncio.Queue`. Classification never runs inside the request.
-
-The FastAPI lifespan starts `CLASSIFICATION_WORKERS` worker tasks. Each handles
-one ticket at a time, so no more than that many classifications run at once.
-Each database operation opens and closes its own short-lived connection.
-
-## Restart behavior
-
-SQLite is the durable source of truth; the queue is only a cache of work to do.
-On startup, before workers run:
-
-- jobs still `processing` are reset to `pending`. With an in-process queue, a
-  job in that state at startup was owned by a process that stopped
-  mid-attempt. Its attempt count is kept, so the retry limit still applies.
-- every `pending` job is enqueued, oldest first.
-- `completed` and `failed` jobs are never enqueued.
-
-On shutdown, workers are cancelled. Interrupted jobs stay `processing` and are
-recovered on the next start.
-
-## Retry policy
-
-Each job gets at most 3 attempts. Provider exceptions, malformed JSON and
-validation failures all count as failed attempts and are retried. After the
-third failure the job becomes `failed` and the ticket's classification fields
-stay null. `last_error` holds fixed text such as
-`LLM call failed: TimeoutError`, never raw model output or exception messages.
-
-## LLM trust boundary
-
-Model output is untrusted text:
+## Project structure
 
 ```text
-raw text -> JSON parse -> Pydantic validation -> persistence
+ticket-triage-service/
+├── app/                    The service (Python, FastAPI)
+│   ├── main.py             Starts the app and serves the dashboard
+│   ├── api/                HTTP endpoints and request/response shapes
+│   ├── db/                 SQLite storage
+│   ├── llm/                Classifier interface, prompt and output checks
+│   ├── classification/     Classifies one ticket, with retries
+│   └── workers/            Background workers that process the queue
+├── frontend/               The dashboard (HTML, CSS and JavaScript, no build step)
+├── sample_data/
+│   └── tickets.json        Ten example tickets
+├── scripts/
+│   └── load_samples.py     Loads the example tickets into a running service
+├── tests/
+│   └── conftest.py         Test setup shared by all tests
+├── API.md                  API reference
+├── DESIGN.md               How the service works inside
+├── AGENTS.md               Conventions for contributors
+└── pyproject.toml          Dependencies and tool settings
 ```
 
-`parse_classification` validates with a strict Pydantic model: exact allowed
-`category` and `priority` values, a non-empty `summary`, no extra fields. Only
-a validated `ClassificationResult` can reach `complete_classification`. Raw
-output is never stored.
+Tests sit next to the code they cover, as `test_*.py` files inside `app/`.
 
-## Prompt injection
+## Running tests and checks
 
-Ticket subject and body come from the public. The prompt marks them as untrusted
-data, tells the model not to follow instructions inside them, and places them as
-JSON inside `<ticket>` tags, escaping `<` so ticket text cannot close the tag.
+```sh
+uv run pytest                 # tests
+uv run ruff check .           # lint
+uv run ruff format --check .  # formatting
+```
 
-That reduces the risk but does not prevent injection. The real application
-boundary is output validation: an injected ticket can never cause a
-disallowed value to be stored. It can still steer the model toward a wrong but
-allowed answer. Sample `t-1005` is a regression test covering both cases.
+Tests use their own temporary databases and never touch your `tickets.db`.
 
-## Trade-offs
+## Troubleshooting
 
-- **SQLite**: zero setup and transactional, but one writer at a time and
-  local to one machine.
-- **In-process queue**: simple and dependency-free, but tied to one process.
-  Running several service processes against one database is unsafe, because
-  startup recovery would reset jobs another process is working on.
-- **No durable external job system**: durability comes from the
-  `classification_jobs` table, not the queue. A crash loses only in-flight
-  attempts, which are retried on restart.
-- **No migrations**: `CREATE TABLE IF NOT EXISTS` only. Schema changes on an
-  existing database need manual handling.
-- **Fake LLM**: the keyword fake is plausible, not accurate. For example, it
-  rates `t-1005` high priority because the text says "URGENT". Behavior against
-  a real provider (latency, rate limits, output drift) is untested.
-- Classification status is named `completed` rather than `classified`.
-- Database calls in the classification workflow run on the event loop. They
-  are short, but a locked database would briefly block the loop.
+| Problem | What to do |
+| --- | --- |
+| `uv: command not found` | Install uv: <https://docs.astral.sh/uv/getting-started/installation/> |
+| `address already in use` | Something else is using port 8000. Start with `--port 8001` and open that port instead. |
+| Dashboard says **Can't reach the API** | The service isn't running, or is on another port. Start it and the dashboard reconnects by itself. |
+| The loader script fails with `Connection refused` | Start the service first, or pass its address: `uv run python scripts/load_samples.py http://127.0.0.1:8001` |
+| Tickets you loaded aren't there | The service may be using a different `tickets.db`. Start it from the project folder, or set `DATABASE_PATH`. |
+| You want to start over with no tickets | Stop the service and delete `tickets.db`. **This deletes all tickets.** |
 
-## With more time
+## Learn more
 
-- Add a real provider client behind `LLMClient`, chosen by configuration, with
-  timeouts and rate-limit handling.
-- Exponential backoff between retries.
-- Graceful shutdown that lets in-flight attempts finish before cancelling.
-- A way to re-run failed jobs or re-classify after a prompt change.
-- Record the prompt/model version with each classification.
-- A small labelled evaluation set to measure classifier agreement.
-- Move to Postgres with a lease-based job claim if more than one process is
-  needed.
+- [API.md](API.md): the full API reference.
+- [DESIGN.md](DESIGN.md): how the service works inside and why.
+- [AGENTS.md](AGENTS.md): project structure and conventions for contributors.
