@@ -120,6 +120,54 @@ def test_recovered_job_with_no_attempts_left_fails_without_calling_llm():
     assert job["attempts"] == 3
 
 
+def runs_for(ticket_id: str) -> list[tuple[int, str, str | None]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT run_number, status, error FROM classification_runs
+            WHERE ticket_id = ? ORDER BY run_number
+            """,
+            (ticket_id,),
+        ).fetchall()
+    return [tuple(row) for row in rows]
+
+
+def test_each_attempt_is_recorded_as_a_run():
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    llm = FakeLLMClient([TimeoutError(), MALFORMED_JSON_RESPONSE, VALID_RESPONSE])
+
+    asyncio.run(classify_ticket("t-1", llm))
+
+    assert runs_for("t-1") == [
+        (1, "failed", "LLM call failed: TimeoutError"),
+        (2, "failed", "Model output was not a valid classification"),
+        (3, "completed", None),
+    ]
+
+
+def test_three_failed_runs_fail_the_job():
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    llm = FakeLLMClient([MALFORMED_JSON_RESPONSE] * 3)
+
+    asyncio.run(classify_ticket("t-1", llm))
+
+    assert [status for _, status, _ in runs_for("t-1")] == ["failed"] * 3
+    assert get_classification_job("t-1")["status"] == "failed"
+
+
+def test_job_with_no_attempts_left_starts_no_run():
+    create_ticket("t-1", "Double charge", "I was charged twice this month")
+    with get_connection() as connection:
+        connection.execute(
+            "UPDATE classification_jobs SET attempts = 3 WHERE ticket_id = ?",
+            ("t-1",),
+        )
+
+    asyncio.run(classify_ticket("t-1", FakeLLMClient([VALID_RESPONSE])))
+
+    assert runs_for("t-1") == []
+
+
 def test_failed_classification_does_not_write_invalid_fields():
     create_ticket("t-1", "Double charge", "I was charged twice this month")
     llm = FakeLLMClient(

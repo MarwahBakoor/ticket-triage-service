@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import tickets
+from app.api import runs, tickets
 from app.db.schema import initialize_database
 from app.db.tickets import recover_unfinished_jobs
 from app.llm.client import LLMClient
@@ -64,6 +64,7 @@ app = FastAPI(
 # No real provider is wired in; a keyword fake keeps the service usable locally.
 app.state.llm_client = KeywordFakeLLMClient(broken_every=4)
 app.include_router(tickets.router)
+app.include_router(runs.router)
 # Served from the same origin as the API, so the dashboard needs no CORS setup.
 app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 

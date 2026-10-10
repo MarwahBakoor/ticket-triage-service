@@ -32,3 +32,33 @@ def initialize_database() -> None:
             )
             """
         )
+        # One row per classification attempt. A run is running until it
+        # finishes, and only finished runs have finished_at.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS classification_runs (
+                id INTEGER PRIMARY KEY,
+                ticket_id TEXT NOT NULL,
+                run_number INTEGER NOT NULL CHECK (run_number >= 1),
+                status TEXT NOT NULL
+                    CHECK (status IN ('running', 'completed', 'failed')),
+                error TEXT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NULL,
+                UNIQUE (ticket_id, run_number),
+                CHECK ((status = 'running') = (finished_at IS NULL))
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS classification_runs_by_status
+            ON classification_runs (status, started_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS classification_runs_by_start
+            ON classification_runs (started_at)
+            """
+        )

@@ -94,3 +94,30 @@ class TicketResponse(BaseModel):
             "classification after 3 attempts."
         )
     )
+
+
+class RunStatus(StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class RunResponse(BaseModel):
+    id: int
+    ticket_id: str
+    run_number: int = Field(
+        description="1 for a ticket's first attempt, 2 for its retry, …"
+    )
+    status: RunStatus
+    error: str | None = Field(
+        description="Why a failed run failed, as fixed text; null otherwise."
+    )
+    started_at: datetime
+    finished_at: datetime | None = Field(description="Null while the run is running.")
+
+
+class RunSummary(BaseModel):
+    running: int
+    completed: int
+    failed: int
+    total: int

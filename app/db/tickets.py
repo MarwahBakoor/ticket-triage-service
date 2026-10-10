@@ -5,6 +5,10 @@ from typing import Any
 from app.db.connection import get_connection
 from app.llm.validation import ClassificationResult
 
+# Run errors are fixed text, like job errors, so model output never leaks in.
+RUN_INTERRUPTED = "Interrupted before finishing"
+JOB_NOT_PROCESSING = "Job was no longer processing"
+
 _SELECT_TICKETS = """
     SELECT
         tickets.id,
@@ -144,10 +148,65 @@ def mark_job_processing(ticket_id: str) -> bool:
     return cursor.rowcount == 1
 
 
-def record_failed_attempt(ticket_id: str, error: str) -> bool:
-    """Count a failed attempt on a processing job and keep its latest error."""
+def start_run(ticket_id: str) -> int | None:
+    """Record a new running attempt for a processing job.
+
+    Returns the run id, or None if the job is missing or not processing.
+    Runs are numbered per ticket from 1.
+    """
     now = datetime.now(UTC).isoformat()
     with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO classification_runs (ticket_id, run_number, status, started_at)
+            SELECT
+                ?,
+                (
+                    SELECT COALESCE(MAX(run_number), 0) + 1
+                    FROM classification_runs
+                    WHERE ticket_id = ?
+                ),
+                'running',
+                ?
+            WHERE EXISTS (
+                SELECT 1 FROM classification_jobs
+                WHERE ticket_id = ? AND status = 'processing'
+            )
+            """,
+            (ticket_id, ticket_id, now, ticket_id),
+        )
+    return cursor.lastrowid if cursor.rowcount == 1 else None
+
+
+def _finish_run(
+    connection: sqlite3.Connection,
+    ticket_id: str,
+    run_id: int,
+    status: str,
+    error: str | None,
+    now: str,
+) -> None:
+    cursor = connection.execute(
+        """
+        UPDATE classification_runs
+        SET status = ?, error = ?, finished_at = ?
+        WHERE id = ? AND ticket_id = ? AND status = 'running'
+        """,
+        (status, error, now, run_id, ticket_id),
+    )
+    if cursor.rowcount != 1:
+        raise RuntimeError(f"run {run_id} is not a running run of {ticket_id!r}")
+
+
+def record_failed_attempt(ticket_id: str, run_id: int, error: str) -> bool:
+    """Fail a run, count the attempt on its job and keep the latest error.
+
+    The run is always recorded as failed. Returns False if the job is no
+    longer processing, in which case the job is left unchanged.
+    """
+    now = datetime.now(UTC).isoformat()
+    with get_connection() as connection:
+        _finish_run(connection, ticket_id, run_id, "failed", error, now)
         cursor = connection.execute(
             """
             UPDATE classification_jobs
@@ -174,10 +233,13 @@ def mark_job_failed(ticket_id: str) -> bool:
     return cursor.rowcount == 1
 
 
-def complete_classification(ticket_id: str, result: ClassificationResult) -> bool:
-    """Store a validated classification and complete its job in one transaction.
+def complete_classification(
+    ticket_id: str, run_id: int, result: ClassificationResult
+) -> bool:
+    """Store a validated classification, completing its run and job together.
 
-    Returns False without writing anything if the job is not processing.
+    If the job is no longer processing, nothing is stored on the ticket or
+    job, the run is recorded as failed, and False is returned.
     """
     now = datetime.now(UTC).isoformat()
     with get_connection() as connection:
@@ -190,7 +252,11 @@ def complete_classification(ticket_id: str, result: ClassificationResult) -> boo
             (now, ticket_id),
         )
         if cursor.rowcount != 1:
+            _finish_run(
+                connection, ticket_id, run_id, "failed", JOB_NOT_PROCESSING, now
+            )
             return False
+        _finish_run(connection, ticket_id, run_id, "completed", None, now)
         cursor = connection.execute(
             """
             UPDATE tickets
@@ -210,10 +276,19 @@ def recover_unfinished_jobs() -> list[str]:
     Call only at startup, before any worker runs: a job still marked
     processing then belongs to a process that stopped mid-attempt. Its
     attempt count is kept, so the interrupted attempt is simply retried.
-    Completed and failed jobs are never returned.
+    Its unfinished run is recorded as failed. Completed and failed jobs are
+    never returned.
     """
     now = datetime.now(UTC).isoformat()
     with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE classification_runs
+            SET status = 'failed', error = ?, finished_at = ?
+            WHERE status = 'running'
+            """,
+            (RUN_INTERRUPTED, now),
+        )
         connection.execute(
             """
             UPDATE classification_jobs

@@ -7,6 +7,8 @@ from app.api.schemas import TicketCategory, TicketPriority
 from app.db.connection import get_connection
 from app.db.schema import initialize_database
 from app.db.tickets import (
+    JOB_NOT_PROCESSING,
+    RUN_INTERRUPTED,
     complete_classification,
     create_ticket,
     get_classification_job,
@@ -16,6 +18,7 @@ from app.db.tickets import (
     mark_job_processing,
     record_failed_attempt,
     recover_unfinished_jobs,
+    start_run,
 )
 from app.llm.validation import ClassificationResult
 
@@ -279,11 +282,59 @@ def test_mark_missing_job_processing_returns_false():
     assert mark_job_processing("missing") is False
 
 
+def get_run(run_id: int) -> dict:
+    with get_connection() as connection:
+        return dict(
+            connection.execute(
+                "SELECT * FROM classification_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        )
+
+
+def count_runs() -> int:
+    return count_rows("classification_runs")
+
+
+def test_start_run_numbers_runs_per_ticket(processing_job):
+    first = start_run("t-1")
+    second = start_run("t-1")
+
+    assert get_run(first)["run_number"] == 1
+    assert get_run(second)["run_number"] == 2
+    run = get_run(first)
+    assert run["ticket_id"] == "t-1"
+    assert run["status"] == "running"
+    assert run["error"] is None
+    assert run["finished_at"] is None
+
+
+def test_start_run_numbers_each_ticket_separately(processing_job):
+    create_ticket("t-2", "Other", "Body")
+    set_job_status("t-2", "processing")
+    start_run("t-1")
+
+    assert get_run(start_run("t-2"))["run_number"] == 1
+
+
+@pytest.mark.parametrize("status", ["pending", "completed", "failed"])
+def test_start_run_refuses_job_that_is_not_processing(status):
+    create_ticket("t-1", "Double charge", "Charged twice")
+    set_job_status("t-1", status)
+
+    assert start_run("t-1") is None
+    assert count_runs() == 0
+
+
+def test_start_run_refuses_missing_job():
+    assert start_run("missing") is None
+    assert count_runs() == 0
+
+
 def test_record_failed_attempt_increments_attempts_and_keeps_latest_error(
     processing_job,
 ):
-    assert record_failed_attempt("t-1", "malformed JSON") is True
-    assert record_failed_attempt("t-1", "invalid category") is True
+    assert record_failed_attempt("t-1", start_run("t-1"), "malformed JSON") is True
+    assert record_failed_attempt("t-1", start_run("t-1"), "invalid category") is True
 
     job = get_classification_job("t-1")
     assert job["attempts"] == 2
@@ -292,10 +343,21 @@ def test_record_failed_attempt_increments_attempts_and_keeps_latest_error(
     assert job["updated_at"] != OLD_TIMESTAMP
 
 
+def test_record_failed_attempt_fails_the_run(processing_job):
+    run_id = start_run("t-1")
+
+    record_failed_attempt("t-1", run_id, "malformed JSON")
+
+    run = get_run(run_id)
+    assert run["status"] == "failed"
+    assert run["error"] == "malformed JSON"
+    assert run["finished_at"] == get_classification_job("t-1")["updated_at"]
+
+
 def test_record_failed_attempt_does_not_touch_ticket(processing_job):
     before = get_ticket("t-1")
 
-    record_failed_attempt("t-1", "malformed JSON")
+    record_failed_attempt("t-1", start_run("t-1"), "malformed JSON")
 
     after = get_ticket("t-1")
     assert after == before
@@ -303,15 +365,31 @@ def test_record_failed_attempt_does_not_touch_ticket(processing_job):
     assert "last_error" not in after
 
 
-def test_record_failed_attempt_ignores_job_that_is_not_processing():
-    create_ticket("t-1", "Double charge", "Charged twice")
+def test_record_failed_attempt_still_fails_run_when_job_is_not_processing(
+    processing_job,
+):
+    run_id = start_run("t-1")
+    set_job_status("t-1", "pending")
 
-    assert record_failed_attempt("t-1", "malformed JSON") is False
+    assert record_failed_attempt("t-1", run_id, "malformed JSON") is False
+
     assert get_classification_job("t-1")["attempts"] == 0
+    assert get_run(run_id)["status"] == "failed"
+
+
+def test_record_failed_attempt_rejects_run_that_is_not_running(processing_job):
+    run_id = start_run("t-1")
+    record_failed_attempt("t-1", run_id, "timeout")
+
+    with pytest.raises(RuntimeError):
+        record_failed_attempt("t-1", run_id, "timeout again")
+
+    assert get_classification_job("t-1")["attempts"] == 1
+    assert get_run(run_id)["error"] == "timeout"
 
 
 def test_mark_job_failed_keeps_attempts_and_error(processing_job):
-    record_failed_attempt("t-1", "timeout")
+    record_failed_attempt("t-1", start_run("t-1"), "timeout")
 
     assert mark_job_failed("t-1") is True
 
@@ -332,34 +410,44 @@ def test_mark_job_failed_ignores_job_that_is_not_processing():
     assert get_classification_job("t-1")["status"] == "pending"
 
 
-def test_complete_classification_updates_ticket_and_job(processing_job):
-    assert complete_classification("t-1", RESULT) is True
+def test_complete_classification_updates_ticket_job_and_run(processing_job):
+    run_id = start_run("t-1")
+
+    assert complete_classification("t-1", run_id, RESULT) is True
 
     ticket = get_ticket("t-1")
     job = get_classification_job("t-1")
+    run = get_run(run_id)
     assert ticket["category"] == "billing"
     assert ticket["priority"] == "high"
     assert ticket["summary"] == "Customer was charged twice."
     assert ticket["classification_status"] == "completed"
     assert job["status"] == "completed"
+    assert run["status"] == "completed"
+    assert run["error"] is None
     assert ticket["updated_at"] != OLD_TIMESTAMP
-    assert ticket["updated_at"] == job["updated_at"]
+    assert ticket["updated_at"] == job["updated_at"] == run["finished_at"]
 
 
 @pytest.mark.parametrize("status", ["pending", "completed", "failed"])
-def test_complete_classification_ignores_job_that_is_not_processing(status):
-    create_ticket("t-1", "Double charge", "Charged twice")
+def test_complete_classification_ignores_job_that_is_not_processing(
+    processing_job, status
+):
+    run_id = start_run("t-1")
     set_job_status("t-1", status)
 
-    assert complete_classification("t-1", RESULT) is False
+    assert complete_classification("t-1", run_id, RESULT) is False
 
     ticket = get_ticket("t-1")
     assert ticket["category"] is None
     assert ticket["summary"] is None
     assert get_classification_job("t-1")["status"] == status
+    run = get_run(run_id)
+    assert run["status"] == "failed"
+    assert run["error"] == JOB_NOT_PROCESSING
 
 
-def test_complete_classification_rolls_back_job_when_ticket_update_fails():
+def test_complete_classification_rolls_back_when_ticket_update_fails():
     # An orphaned job row makes the ticket update fail after the job update.
     with get_connection() as connection:
         connection.execute(
@@ -369,13 +457,15 @@ def test_complete_classification_rolls_back_job_when_ticket_update_fails():
             """,
             ("t-1", "processing", OLD_TIMESTAMP, OLD_TIMESTAMP),
         )
+    run_id = start_run("t-1")
 
     with pytest.raises(RuntimeError):
-        complete_classification("t-1", RESULT)
+        complete_classification("t-1", run_id, RESULT)
 
     job = get_classification_job("t-1")
     assert job["status"] == "processing"
     assert job["updated_at"] == OLD_TIMESTAMP
+    assert get_run(run_id)["status"] == "running"
 
 
 def test_recover_unfinished_jobs_returns_pending_job():
@@ -386,13 +476,40 @@ def test_recover_unfinished_jobs_returns_pending_job():
 
 
 def test_recover_unfinished_jobs_resets_interrupted_processing_job(processing_job):
-    record_failed_attempt("t-1", "LLM call failed: TimeoutError")
+    record_failed_attempt("t-1", start_run("t-1"), "LLM call failed: TimeoutError")
 
     assert recover_unfinished_jobs() == ["t-1"]
     job = get_classification_job("t-1")
     assert job["status"] == "pending"
     assert job["attempts"] == 1
     assert job["updated_at"] != OLD_TIMESTAMP
+
+
+def test_recover_unfinished_jobs_fails_interrupted_runs_only(processing_job):
+    finished = start_run("t-1")
+    record_failed_attempt("t-1", finished, "timeout")
+    interrupted = start_run("t-1")
+
+    recover_unfinished_jobs()
+
+    assert get_run(interrupted)["status"] == "failed"
+    assert get_run(interrupted)["error"] == RUN_INTERRUPTED
+    assert get_run(interrupted)["finished_at"] is not None
+    assert get_run(finished)["error"] == "timeout"
+    # An interrupted run does not use up one of the job's attempts.
+    assert get_classification_job("t-1")["attempts"] == 1
+
+
+def test_schema_rejects_running_run_with_finish_time():
+    with pytest.raises(sqlite3.IntegrityError), get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO classification_runs
+                (ticket_id, run_number, status, started_at, finished_at)
+            VALUES ('t-1', 1, 'running', ?, ?)
+            """,
+            (OLD_TIMESTAMP, OLD_TIMESTAMP),
+        )
 
 
 @pytest.mark.parametrize("status", ["completed", "failed"])

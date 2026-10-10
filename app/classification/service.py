@@ -5,6 +5,7 @@ from app.db.tickets import (
     mark_job_failed,
     mark_job_processing,
     record_failed_attempt,
+    start_run,
 )
 from app.llm.client import LLMClient
 from app.llm.prompts import build_classification_prompt
@@ -33,6 +34,11 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
             mark_job_failed(ticket_id)
             return False
 
+        # Each attempt is recorded as its own run.
+        run_id = start_run(ticket_id)
+        if run_id is None:
+            return False
+
         # Errors are stored as fixed text so untrusted model output never leaks in.
         try:
             raw_output = await llm.classify(prompt)
@@ -44,7 +50,7 @@ async def classify_ticket(ticket_id: str, llm: LLMClient) -> bool:
             except ClassificationError:
                 last_error = "Model output was not a valid classification"
             else:
-                return complete_classification(ticket_id, result)
+                return complete_classification(ticket_id, run_id, result)
 
-        if not record_failed_attempt(ticket_id, last_error):
+        if not record_failed_attempt(ticket_id, run_id, last_error):
             return False

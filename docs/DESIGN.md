@@ -9,11 +9,17 @@ How the ticket-triage service works and why. For running and using it, see
   `priority` and `summary`.
 - `classification_jobs`: one row per ticket with the async status, `attempts`
   and `last_error`.
+- `classification_runs`: one row per classification attempt, numbered per
+  ticket (`run_number`), with its status (`running`, `completed` or `failed`),
+  a fixed-text `error`, and `started_at`/`finished_at`. A CHECK constraint
+  keeps `finished_at` null exactly while a run is `running`.
 
 Operational state lives apart from the ticket so that the ticket only holds
 validated results. Retries, errors and status transitions change the job row
 without touching ticket data, and a validated result plus the `completed`
-status are written in one transaction. Both CHECK constraints and the
+status are written in one transaction. Each run is finished in the same
+transaction as the job change it causes, so runs and jobs always agree.
+Both CHECK constraints and the
 application restrict the allowed values. There are no foreign keys; the
 relationship is enforced in application code.
 
@@ -35,6 +41,8 @@ On startup, before workers run:
 - jobs still `processing` are reset to `pending`. With an in-process queue, a
   job in that state at startup was owned by a process that stopped
   mid-attempt. Its attempt count is kept, so the retry limit still applies.
+- runs still `running` are marked `failed` with the error
+  `Interrupted before finishing`. They don't use up an attempt.
 - every `pending` job is enqueued, oldest first.
 - `completed` and `failed` jobs are never enqueued.
 
@@ -103,6 +111,15 @@ allowed answer. Sample `t-1005` is a regression test covering both cases.
 - A small labelled evaluation set to measure classifier agreement.
 - Move to Postgres with a lease-based job claim if more than one process is
   needed.
+
+## Internal endpoints
+
+The dashboard's metrics view reads runs from `GET /internal/runs` and
+`GET /internal/runs/summary`. They are deliberately not part of the public
+API: they are left out of the OpenAPI schema and `API.md`, and may change
+without notice. The service has no authentication, so this keeps them out of
+the public contract rather than protecting them; in production they would sit
+behind auth or on an internal network.
 
 ## Dashboard
 
