@@ -351,7 +351,8 @@ A classification failure is **not** an HTTP error. It appears as
 - No stats or count endpoint; list responses don't include a total.
 - Run one service process per database: workers and startup recovery assume
   they are the only process using it.
-- The running service uses a keyword-based fake classifier, not a real model.
+- The running service uses a keyword-based stand-in classifier, not a real
+  model.
   Every 4th call deliberately returns broken output (malformed JSON, an
   unknown category or priority, or JSON wrapped in prose) so that retries
   happen.

@@ -9,8 +9,9 @@ background with an LLM:
 
 The model is treated as an unreliable dependency that returns text: its output
 is validated before anything is stored, and failures are retried, then
-recorded. No real model is wired in; a keyword-based fake stands in for one
-and sometimes returns broken output on purpose.
+recorded. No real model is wired in; a keyword-based stand-in
+(`app/llm/keyword.py`) takes its place and sometimes returns broken output on
+purpose.
 
 ## Contents
 
@@ -186,10 +187,10 @@ not be obeyed. That reduces the risk but does not prevent injection.
 
 The real boundary is validation: an injected ticket cannot get a disallowed
 value stored. It *can* steer the model to a wrong but allowed answer.
-Sample t-1005 shows this, and tests cover both cases. The fake rates t-1005
-`high` because it says "URGENT", and a real model might write its requested
-summary. The summary is model text, so the dashboard only ever inserts it as
-text, never as HTML.
+Sample t-1005 shows this, and tests cover both cases. The keyword stand-in
+rates t-1005 `high` because it says "URGENT", and a real model might write its
+requested summary. The summary is model text, so the dashboard only ever
+inserts it as text, never as HTML.
 
 ### API shape
 
@@ -201,7 +202,7 @@ text, never as HTML.
 
 ## Weaknesses
 
-- **No real model.** The keyword fake is plausible, not accurate. Latency,
+- **No real model.** The keyword stand-in is plausible, not accurate. Latency,
   rate limits and output drift from a real provider are untested.
 - **One process per database.** Startup recovery assumes no other process is
   working on jobs. A second instance would reset the first one's work.
@@ -252,7 +253,8 @@ app/
 ├── constants.py        Tunable values: attempts, timeout, retry delay, limits
 ├── api/                HTTP routes and request/response models
 ├── db/                 Schema and parameterized SQL
-├── llm/                Client interface, fakes, prompt, output validation
+├── llm/                Client interface, keyword stand-in model, prompt,
+│                       output validation; fake.py holds test doubles
 ├── classification/     One ticket's classification, with retries
 └── workers/            Queue and worker pool
 frontend/               Dashboard (plain HTML/CSS/JS, no build step)

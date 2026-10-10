@@ -119,7 +119,8 @@ allowed answer. Sample `t-1005` is a regression test covering both cases.
   attempts, which are retried on restart.
 - **No migrations**: `CREATE TABLE IF NOT EXISTS` only. Schema changes on an
   existing database need manual handling.
-- **Fake LLM**: the keyword fake is plausible, not accurate. For example, it
+- **Stand-in LLM**: the keyword client (`app/llm/keyword.py`) is plausible,
+  not accurate. For example, it
   rates `t-1005` high priority because the text says "URGENT". Behavior against
   a real provider (latency, rate limits, output drift) is untested.
 - Every error is retried, including ones that cannot succeed on a retry

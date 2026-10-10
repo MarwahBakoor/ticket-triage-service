@@ -25,6 +25,7 @@ app/
 │   └── test_runs.py
 ├── llm/
 │   ├── client.py
+│   ├── keyword.py
 │   ├── fake.py
 │   ├── prompts.py
 │   ├── validation.py
@@ -66,8 +67,9 @@ create empty modules or directories merely to match this tree.
 - `app/api/`: FastAPI routes, HTTP status codes, request and response handling.
 - `app/db/`: SQLite connections, schema initialization, and explicit
   parameterized SQL.
-- `app/llm/`: LLM interface, fake implementation, prompt construction, and
-  raw-output validation.
+- `app/llm/`: LLM interface, prompt construction, and raw-output validation.
+  `keyword.py` is the stand-in model the running service uses; `fake.py`
+  holds test doubles only and must not be imported by application code.
 - `app/classification/`: classification workflow, retries, and coordination
   between the LLM and database.
 - `app/workers/`: asynchronous queue, worker lifecycle, concurrency, and startup

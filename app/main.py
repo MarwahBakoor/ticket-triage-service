@@ -13,7 +13,7 @@ from app.api import runs, tickets
 from app.db.schema import initialize_database
 from app.db.tickets import recover_unfinished_jobs
 from app.llm.client import LLMClient
-from app.llm.fake import KeywordFakeLLMClient
+from app.llm.keyword import KeywordLLMClient
 from app.workers.classification import ClassificationWorkers, worker_count_from_env
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -62,13 +62,11 @@ app = FastAPI(
     ],
     lifespan=lifespan,
 )
-# No real provider is wired in; a keyword fake keeps the service usable locally.
-app.state.llm_client = KeywordFakeLLMClient(
-    broken_every=constants.FAKE_LLM_BROKEN_EVERY
-)
+# No real provider is wired in; a keyword stand-in keeps the service usable.
+app.state.llm_client = KeywordLLMClient(broken_every=constants.FAKE_LLM_BROKEN_EVERY)
+# Routers
 app.include_router(tickets.router)
 app.include_router(runs.router)
-# Served from the same origin as the API, so the dashboard needs no CORS setup.
 app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
