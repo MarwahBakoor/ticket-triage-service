@@ -52,7 +52,8 @@ app = FastAPI(
         "Submitting a ticket stores it and returns `202 Accepted` straight away; "
         "classification runs afterwards on a background worker. Poll the ticket "
         "and watch `classification_status` move from `pending` through "
-        "`processing` to `completed` or `failed`. See `API.md` for the full guide."
+        "`processing` to `completed` or `failed`. See `docs/API.md` for the "
+        "full guide."
     ),
     openapi_tags=[
         {"name": "tickets", "description": "Submit, read and list tickets."},

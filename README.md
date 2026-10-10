@@ -123,8 +123,8 @@ curl http://127.0.0.1:8000/tickets/t-2001
 curl "http://127.0.0.1:8000/tickets?category=technical&order=priority&limit=10"
 ```
 
-For every endpoint, parameter and error, see **[API.md](API.md)**, or try the
-API in your browser at <http://127.0.0.1:8000/docs>.
+For every endpoint, parameter and error, see **[docs/API.md](docs/API.md)**,
+or try the API in your browser at <http://127.0.0.1:8000/docs>.
 
 ## Configuration
 
@@ -179,8 +179,9 @@ ticket-triage-service/
 │   └── load_samples.py     Loads the example tickets into a running service
 ├── tests/
 │   └── conftest.py         Test setup shared by all tests
-├── API.md                  API reference
-├── DESIGN.md               How the service works inside
+├── docs/
+│   ├── API.md              API reference
+│   └── DESIGN.md           How the service works inside
 ├── AGENTS.md               Conventions for contributors
 └── pyproject.toml          Dependencies and tool settings
 ```
@@ -210,6 +211,6 @@ Tests use their own temporary databases and never touch your `tickets.db`.
 
 ## More documentation
 
-- [API.md](API.md): full API reference.
-- [DESIGN.md](DESIGN.md): how the service works inside, and why.
+- [docs/API.md](docs/API.md): full API reference.
+- [docs/DESIGN.md](docs/DESIGN.md): how the service works inside, and why.
 - [AGENTS.md](AGENTS.md): conventions for contributors.

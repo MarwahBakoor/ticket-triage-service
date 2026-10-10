@@ -1,7 +1,7 @@
 # Design notes
 
 How the ticket-triage service works and why. For running and using it, see
-[README.md](README.md); for the API, see [API.md](API.md).
+[README.md](../README.md); for the API, see [API.md](API.md).
 
 ## Data model
 

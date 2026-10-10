@@ -30,6 +30,10 @@ app/
     ├── classification.py
     └── test_classification.py
 
+docs/
+├── API.md
+└── DESIGN.md
+
 frontend/
 ├── index.html
 ├── styles.css
